@@ -6,6 +6,7 @@
 #include <QtQmlIntegration>
 
 class QOpenGLContext;
+class QQuickItem;
 class QQuickWindow;
 
 extern "C" {
@@ -69,6 +70,7 @@ public:
     // The item that owns the FBO tells whichever top-level window it currently
     // renders into; the mpv frame-update callback repaints exactly that window.
     void setRenderWindow(QQuickWindow *window);
+    void setRenderItem(QQuickItem *item);
 
 signals:
     void playingChanged(bool playing);
@@ -90,7 +92,9 @@ public:
     mpv_render_context *m_renderContext = nullptr;
     QOpenGLContext *m_renderGlContext = nullptr; // context the render ctx was built on
     QPointer<QQuickWindow> m_renderWindow;
-    int m_updateCount = 0;
+    QPointer<QQuickItem> m_renderItem;
+    bool m_pendingOpen = false;
+    QString m_pendingLocation;
 
     bool m_playing = false;
     double m_position = 0.0;

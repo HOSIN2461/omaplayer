@@ -43,9 +43,15 @@ int main(int argc, char *argv[])
         Qt::QueuedConnection);
     engine.loadFromModule(QStringLiteral("Omaplayer"), QStringLiteral("Main"));
 
-    // IINA-style usage: `omaplayer <file-or-url>...`
-    if (argc > 1)
-        MpvCore::instance()->open(QString::fromLocal8Bit(argv[1]));
+    // IINA-style usage: `omaplayer <file-or-url>...` (options start with `--`
+    // and must be skipped before picking the media path).
+    for (int i = 1; i < argc; i++) {
+        const QString arg = QString::fromLocal8Bit(argv[i]);
+        if (arg.startsWith(QLatin1String("--")))
+            continue;
+        MpvCore::instance()->open(arg);
+        break;
+    }
 
     return app.exec();
 }

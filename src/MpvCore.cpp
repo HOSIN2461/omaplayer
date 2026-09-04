@@ -2,7 +2,7 @@
 
 #include <QOpenGLContext>
 #include <QQuickWindow>
-#include <QTimer>
+#include <QQuickItem>
 
 #include <cstring>
 
@@ -26,12 +26,11 @@ void onUpdate(void *context)
     auto *core = static_cast<MpvCore *>(context);
     QMetaObject::invokeMethod(core, [core] {
         if (QQuickWindow *window = core->m_renderWindow) {
-            if (++core->m_updateCount % 60 == 1)
-                qInfo("onUpdate -> window=%p title=\"%s\" visible=%d", (void *)window,
-                      qPrintable(window->title()), int(window->isVisible()));
+            // The item must be marked dirty itself, otherwise the FBO render
+            // pass is not re-run; window->update() alone is not enough.
+            if (core->m_renderItem)
+                core->m_renderItem->update();
             window->update();
-        } else {
-            qInfo("onUpdate: m_renderWindow NULL");
         }
     }, Qt::QueuedConnection);
 }
@@ -79,6 +78,7 @@ MpvCore::MpvCore(QObject *parent)
     mpv_observe_property(m_handle, 0, "path", MPV_FORMAT_STRING);
 
     mpv_set_wakeup_callback(m_handle, &MpvCore::wakeupCallback, this);
+    mpv_request_log_messages(m_handle, "warn");
 
     if (mpv_initialize(m_handle) < 0) {
         qWarning("mpv_initialize failed");
@@ -133,6 +133,19 @@ mpv_render_context *MpvCore::renderContext()
         return nullptr;
     }
     mpv_render_context_set_update_callback(m_renderContext, &onUpdate, this);
+
+    // mpv initializes its video output the moment playback starts, and the
+    // libmpv VO refuses to come up without a render context ("No render
+    // context set"). Defer the file load until the first render gives us a
+    // context, otherwise the video stream silently never starts.
+    if (m_pendingOpen) {
+        m_pendingOpen = false;
+        const QString location = m_pendingLocation;
+        m_pendingLocation.clear();
+        const QByteArray bytes = location.toUtf8();
+        const char *cmd[] = { "loadfile", bytes.constData(), nullptr };
+        mpv_command(m_handle, cmd);
+    }
     return m_renderContext;
 }
 
@@ -141,9 +154,17 @@ void MpvCore::setRenderWindow(QQuickWindow *window)
     m_renderWindow = window;
 }
 
+void MpvCore::setRenderItem(QQuickItem *item)
+{
+    m_renderItem = item;
+}
+
 void MpvCore::renderFrame(int fbo, int width, int height)
 {
-    if (!m_renderContext)
+    // Runs on the render thread with the scene-graph GL context current; the
+    // render context is born here on the first frame.
+    mpv_render_context *ctx = renderContext();
+    if (!ctx)
         return;
     mpv_opengl_fbo mpvFbo{
         fbo,
@@ -157,7 +178,11 @@ void MpvCore::renderFrame(int fbo, int width, int height)
         { MPV_RENDER_PARAM_FLIP_Y, &flipY },
         { MPV_RENDER_PARAM_INVALID, nullptr },
     };
-    mpv_render_context_render(m_renderContext, params);
+    mpv_render_context_render(ctx, params);
+
+    // Re-arm the update request; mpv fires the update callback on demand, so
+    // without this it signals a new frame once and then goes quiet.
+    mpv_render_context_update(ctx);
 }
 
 void MpvCore::wakeupCallback(void *context)
@@ -232,6 +257,12 @@ void MpvCore::handleWakeup()
             }
             break;
         }
+        case MPV_EVENT_LOG_MESSAGE: {
+            auto *log = static_cast<mpv_event_log_message *>(event->data);
+            if (log && log->prefix && log->text)
+                qInfo("[mpv:%s] %s", log->prefix, log->text);
+            break;
+        }
         default:
             break;
         }
@@ -242,7 +273,15 @@ void MpvCore::open(const QString &location)
 {
     if (!m_handle)
         return;
-    const char *cmd[] = { "loadfile", location.toUtf8().constData(), nullptr };
+    if (!m_renderContext) {
+        // No render context yet (no first paint). Queue the file; renderContext()
+        // will start playback once the mpv VO can attach to a context.
+        m_pendingOpen = true;
+        m_pendingLocation = location;
+        return;
+    }
+    const QByteArray bytes = location.toUtf8();
+    const char *cmd[] = { "loadfile", bytes.constData(), nullptr };
     mpv_command(m_handle, cmd);
 }
 

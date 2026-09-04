@@ -4,6 +4,7 @@
 
 #include <QOpenGLFramebufferObject>
 #include <QOpenGLContext>
+#include <QOpenGLFunctions>
 #include <QtGui/qopengl.h>
 
 namespace {
@@ -15,34 +16,21 @@ public:
     {
         const QSize size = framebufferObject()->size();
         const GLuint fbo = framebufferObject()->handle();
-        QOpenGLContext *ctx = QOpenGLContext::currentContext();
-        if (++s_frame % 60 == 1)
-            qInfo("render fbo=%u %dx%d ctx=%p", fbo, size.width(), size.height(), (void *)ctx);
+        QOpenGLFunctions *gl = QOpenGLContext::currentContext()
+                                   ? QOpenGLContext::currentContext()->functions()
+                                   : nullptr;
+        if (!gl)
+            return;
+        // Bind our framebuffer explicitly and leave the previous binding
+        // untouched; Qt does not guarantee the FBO is bound on entry.
+        GLint previousFbo = 0;
+        gl->glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFbo);
+        gl->glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        gl->glViewport(0, 0, size.width(), size.height());
         MpvCore::instance()->renderFrame(GLint(fbo), size.width(), size.height());
+        gl->glBindFramebuffer(GL_FRAMEBUFFER, GLuint(previousFbo));
     }
-
-    QOpenGLFramebufferObject *createFramebufferObject(const QSize &size) override
-    {
-        if (++s_created % 10 == 1)
-            qInfo("FBO létrehozva: %dx%d", size.width(), size.height());
-        return new QOpenGLFramebufferObject(size);
-    }
-
-    void synchronize(QQuickFramebufferObject *item) override
-    {
-        Q_UNUSED(item)
-        if (++s_sync % 60 == 1)
-            qInfo("synchronize");
-    }
-
-    static int s_frame;
-    static int s_created;
-    static int s_sync;
 };
-
-int MpvRenderer::s_frame = 0;
-int MpvRenderer::s_created = 0;
-int MpvRenderer::s_sync = 0;
 
 } // namespace
 
@@ -58,8 +46,10 @@ MpvVideoItem::MpvVideoItem(QQuickItem *parent)
 // a second window; the frame-update callback must repaint that window.
 void MpvVideoItem::itemChange(ItemChange change, const ItemChangeData &value)
 {
-    if (change == ItemSceneChange)
+    if (change == ItemSceneChange) {
         MpvCore::instance()->setRenderWindow(window());
+        MpvCore::instance()->setRenderItem(this);
+    }
     QQuickFramebufferObject::itemChange(change, value);
 }
 

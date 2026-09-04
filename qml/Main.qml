@@ -140,10 +140,6 @@ ApplicationWindow {
             pipWindow.show()
             pipWindow.requestActivate()
             root.hide()
-            console.log("PIP dbg: deklarált", 360, 203,
-                        "| contentItem", pipWindow.contentItem.width, pipWindow.contentItem.height,
-                        "| video", video.width, video.height,
-                        "| visible flags", pipWindow.windowStates)
         }
     }
 
@@ -225,6 +221,7 @@ ApplicationWindow {
         minimumHeight: 203
         maximumHeight: 203
         color: "black"
+        title: mpv.mediaTitle.length > 0 ? mpv.mediaTitle : "Omaplayer"
 
         flags: Qt.Window | Qt.FramelessWindowHint
                | Qt.WindowStaysOnTopHint
