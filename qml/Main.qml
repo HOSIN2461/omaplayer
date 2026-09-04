@@ -14,6 +14,46 @@ ApplicationWindow {
     color: "black"
     property MpvCore mpv: MpvCore {}
     property bool autoPip: Qt.application.arguments.indexOf("--pip") >= 0
+    property int pipW: 360
+    property int pipH: 203
+
+    // Mouse grip for resizing the frameless PiP frame. The whole edge set is
+    // passed to startSystemResize() so the compositor moves the opposite
+    // edges; when it refuses, width/height are tracked by hand.
+    component PipResizeGrip: MouseArea {
+        id: grip
+        property int edges: Qt.RightEdge
+        property int minW: 160
+        property int minH: 90
+        property bool manual: false
+        property int pressX: 0
+        property int pressY: 0
+        property int pressW: 0
+        property int pressH: 0
+
+        hoverEnabled: true
+        cursorShape: (edges & Qt.RightEdge) && (edges & Qt.BottomEdge) ? Qt.SizeFDiagCursor
+                    : (edges & Qt.LeftEdge) && (edges & Qt.BottomEdge) ? Qt.SizeBDiagCursor
+                    : (edges & Qt.RightEdge) || (edges & Qt.LeftEdge) ? Qt.SizeHorCursor
+                    : Qt.SizeVerCursor
+
+        onPressed: mouse => {
+            pressX = mouse.x
+            pressY = mouse.y
+            pressW = pipWindow.width
+            pressH = pipWindow.height
+            manual = !pipWindow.startSystemResize(edges)
+        }
+        onPositionChanged: mouse => {
+            if (!manual)
+                return
+            if (edges & Qt.RightEdge)
+                pipWindow.width = Math.max(minW, pressW + (mouse.x - pressX))
+            if (edges & Qt.BottomEdge)
+                pipWindow.height = Math.max(minH, pressH + (mouse.y - pressY))
+        }
+        onReleased: manual = false
+    }
 
     Component.onCompleted: {
         if (autoPip)
@@ -137,6 +177,8 @@ ApplicationWindow {
             exitPip()
         } else {
             video.parent = pipWindow.contentItem
+            pipWindow.width = root.pipW
+            pipWindow.height = root.pipH
             pipWindow.show()
             pipWindow.requestActivate()
             root.hide()
@@ -209,22 +251,25 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+0"; onActivated: mpv.setVolume(100) }
 
     // --- picture-in-picture window -------------------------------------------
-    // Small always-on-top frame that hosts the re-parented video item.
+    // Small always-on-top frame that hosts the re-parented video item. It is
+    // freely resizable with the mouse; the current size is cached so a
+    // re-opened PiP keeps its previous size.
     Window {
         id: pipWindow
         visible: false
 
-        width: 360
-        height: 203
-        minimumWidth: 360
-        maximumWidth: 360
-        minimumHeight: 203
-        maximumHeight: 203
+        width: root.pipW
+        height: root.pipH
+        minimumWidth: 160
+        minimumHeight: 90
         color: "black"
-        title: mpv.mediaTitle.length > 0 ? mpv.mediaTitle : "Omaplayer"
+        title: "PiP: " + (mpv.mediaTitle.length > 0 ? mpv.mediaTitle : "Omaplayer")
 
         flags: Qt.Window | Qt.FramelessWindowHint
                | Qt.WindowStaysOnTopHint
+
+        onWidthChanged: root.pipW = width
+        onHeightChanged: root.pipH = height
 
         // The re-parented video item fills the contentItem; every chrome
         // element below uses explicit z so it floats above the video.
@@ -285,6 +330,52 @@ ApplicationWindow {
                 else
                     mpv.seekRelative(wheel.angleDelta.y > 0 ? 5 : -5)
             }
+        }
+
+        // Cheap native resize first; some compositors ignore the interactive
+        // resize request, so fall back to manual size tracking (grow-only,
+        // since a frameless window cannot be repositioned by the client).
+        PipResizeGrip {
+            z: 20
+            edges: Qt.RightEdge
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.topMargin: 26
+            anchors.bottom: parent.bottom
+            width: 6
+        }
+        PipResizeGrip {
+            z: 20
+            edges: Qt.BottomEdge
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: 6
+        }
+        PipResizeGrip {
+            z: 20
+            edges: Qt.LeftEdge
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.topMargin: 26
+            anchors.bottom: parent.bottom
+            width: 6
+        }
+        PipResizeGrip {
+            z: 20
+            edges: Qt.RightEdge | Qt.BottomEdge
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            width: 16
+            height: 16
+        }
+        PipResizeGrip {
+            z: 20
+            edges: Qt.LeftEdge | Qt.BottomEdge
+            anchors.left: parent.left
+            anchors.bottom: parent.bottom
+            width: 16
+            height: 16
         }
 
         Shortcut { sequence: "Escape"; onActivated: root.exitPip() }
