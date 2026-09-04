@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Omaplayer
+GenericName=Videolejátszó
+Comment=Magyar videolejátszó – mpv alapra épülve
+Exec=omaplayer %U
+Icon=omaplayer
+Terminal=false
+Categories=AudioVideo;Player;Video;
+Keywords=video;film;lejátszó;mpv;youtube;
+MimeType=video/mp4;video/x-matroska;video/webm;video/quicktime;video/x-msvideo;video/x-flv;video/x-m4v;audio/mpeg;audio/flac;audio/ogg;audio/wav;application/ogg;audio/opus;audio/x-m4a;
+StartupNotify=true
+StartupWMClass=omaplayer
