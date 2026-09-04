@@ -76,6 +76,7 @@ ApplicationWindow {
         id: bar
         mpv: root.mpv
 
+        z: 2 // above the gesture layer so seek/buttons get the pointer
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom

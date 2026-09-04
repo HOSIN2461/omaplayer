@@ -95,6 +95,9 @@ public:
     QPointer<QQuickItem> m_renderItem;
     bool m_pendingOpen = false;
     QString m_pendingLocation;
+    bool m_contextRebootPending = false; // deferred loadfile after ctx recreation
+    QString m_contextRebootLocation;
+    double m_contextRebootPosition = 0.0;
 
     bool m_playing = false;
     double m_position = 0.0;

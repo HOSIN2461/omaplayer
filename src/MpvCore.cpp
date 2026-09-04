@@ -105,10 +105,18 @@ mpv_render_context *MpvCore::renderContext()
         return m_renderContext;
 
     if (m_renderContext && m_renderGlContext != current) {
+        qInfo("rebuilding mpv render context for %p", (void *)current);
         mpv_render_context_set_update_callback(m_renderContext, nullptr, nullptr);
         mpv_render_context_free(m_renderContext);
         m_renderContext = nullptr;
         m_renderGlContext = nullptr;
+        // A mid-flight mpv VO cannot be re-initialized into a recreated render
+        // context in place, and reloding inside this same pass races the
+        // context's first render ("No render context set"). Reboot the
+        // playback only after the new context has rendered its first frame.
+        m_contextRebootPending = !m_filePath.isEmpty();
+        m_contextRebootLocation = m_filePath;
+        m_contextRebootPosition = m_position;
     }
 
     if (m_renderContext)
@@ -163,6 +171,10 @@ void MpvCore::renderFrame(int fbo, int width, int height)
 {
     // Runs on the render thread with the scene-graph GL context current; the
     // render context is born here on the first frame.
+    if (width <= 0 || height <= 0) {
+        qInfo("skipping 0-size FBO render");
+        return;
+    }
     mpv_render_context *ctx = renderContext();
     if (!ctx)
         return;
@@ -172,7 +184,7 @@ void MpvCore::renderFrame(int fbo, int width, int height)
         height,
         0, // internal_format, 0 = keep
     };
-    int flipY = 1;
+    int flipY = 0;
     mpv_render_param params[] = {
         { MPV_RENDER_PARAM_OPENGL_FBO, &mpvFbo },
         { MPV_RENDER_PARAM_FLIP_Y, &flipY },
@@ -183,6 +195,26 @@ void MpvCore::renderFrame(int fbo, int width, int height)
     // Re-arm the update request; mpv fires the update callback on demand, so
     // without this it signals a new frame once and then goes quiet.
     mpv_render_context_update(ctx);
+
+    // Deferred reboot after a render-context recreation: the new context is
+    // now confirmed ("set") so a fresh loadfile at the saved position can
+    // start the video cleanly instead of mpv failing its in-place VO reinit.
+    if (m_contextRebootPending) {
+        m_contextRebootPending = false;
+        const QString location = m_contextRebootLocation;
+        m_contextRebootLocation.clear();
+        const double pos = m_contextRebootPosition;
+        if (!location.isEmpty()) {
+            const QByteArray bytes = location.toUtf8();
+            const char *cmd[] = { "loadfile", bytes.constData(), "replace", nullptr };
+            mpv_command(m_handle, cmd);
+            if (pos > 0) {
+                const QByteArray sec = QByteArray::number(pos);
+                const char *seek[] = { "seek", sec.constData(), "absolute", nullptr };
+                mpv_command(m_handle, seek);
+            }
+        }
+    }
 }
 
 void MpvCore::wakeupCallback(void *context)
