@@ -1,0 +1,31 @@
+# omaplayer — natív Qt Quick videolejátszó Omarchy-hoz, mpv render API-val.
+#
+# Verziószámos build. Helyi teszt buildhez cseréld ki a source= sort:
+#   source=("$pkgname::file:///home/external/Projects/omaplayer")
+#   sha256sums=('SKIP')
+# (A .git nélkül a cmake as-is épít; a CPack/install azonos marad.)
+
+pkgname=omaplayer
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Magyar videolejátszó – mpv alapra építve (Qt Quick)"
+arch=('x86_64')
+url="https://github.com/HOSIN2461/omaplayer"
+license=('MIT')
+install="$pkgname.install"
+depends=('qt6-base' 'qt6-declarative' 'qt6-wayland' 'mpv' 'hicolor-icon-theme')
+optdepends=('yt-dlp: webes (YouTube) források lejátszása')
+makedepends=('cmake' 'ninja' 'git')
+source=("$pkgname::git+https://github.com/HOSIN2461/omaplayer.git#tag=v$pkgver")
+sha256sums=('SKIP')
+
+build() {
+    cmake -S "$pkgname" -B build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr
+    cmake --build build
+}
+
+package() {
+    DESTDIR="$pkgdir" cmake --install build
+}
