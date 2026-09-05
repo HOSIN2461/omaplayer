@@ -32,28 +32,16 @@ Item {
     Behavior on opacity { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
     Behavior on y { NumberAnimation { duration: 380; easing.type: Easing.OutCubic } }
 
-    function show() { exposed = true; reTouch() }
+    function show() { exposed = true; if (bar.onRetouch) bar.onRetouch() }
     function hide() { exposed = false }
 
-    // Calls a named function on the window/scope that owns it (first ancestor
-    // that has it) — the same walking trick reTouch() uses.
-    function callMain(name, btn) {
-        var w = bar.parent
-        while (w && !w[name])
-            w = w.parent
-        if (w)
-            w[name](btn)
-    }
-
-    // Restart the root auto-hide timer (see Main.qml) so an interaction while
-    // the bar is up resets the countdown.
-    function reTouch() {
-        var win = bar.parent
-        while (win && !win.reTouch)
-            win = win.parent
-        if (win)
-            win.reTouch()
-    }
+    // Direct function references injected by Main.qml. Walking up the parent
+    // chain to find root methods is unreliable (the contentItem is the last
+    // Item in that chain, so the ApplicationWindow object is never reached),
+    // which is why the settings/playlist popups silently never opened before.
+    property var onSettings: null
+    property var onPlaylist: null
+    property var onRetouch: null
 
     // --- the floating pill -------------------------------------------------
     Rectangle {
@@ -177,14 +165,14 @@ Item {
                 id: gearBtn
                 glyph: "\uF013"                                 // FA cog
                 tip: qsTr("Beállítások")
-                onClicked: bar.callMain("openSettingsAt", gearBtn)
+                onClicked: { if (bar.onSettings) bar.onSettings(gearBtn) }
             }
 
             IconButton {
                 id: menuBtn
                 glyph: "\uF0C9"                                 // FA bars: playlist
                 tip: qsTr("Lejátszási lista")
-                onClicked: bar.callMain("openPlaylistAt", menuBtn)
+                onClicked: { if (bar.onPlaylist) bar.onPlaylist(menuBtn) }
             }
         }
 

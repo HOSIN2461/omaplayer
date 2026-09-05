@@ -46,6 +46,12 @@ ApplicationWindow {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
+
+        // Direct wiring — the old parent-chain walk from the bar could not
+        // reach these Main.qml methods and silently did nothing.
+        onSettings: (btn) => openSettingsAt(btn)
+        onPlaylist: (btn) => openPlaylistAt(btn)
+        onRetouch: () => reTouch()
     }
 
     // Auto-hide: fade the bar away after idle, keep it while the pointer or a
