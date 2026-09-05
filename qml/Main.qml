@@ -298,9 +298,9 @@ ApplicationWindow {
         contentItem: Column {
             spacing: 3
 
-            MenuRow { rowText: qsTr("Open media…");   glyph: "\uF07C"; onActivate: () => openDialog.open() }
-            MenuRow { rowText: qsTr("Open URL…");     glyph: "\uF0AC"; onActivate: () => urlDialog.open() }
-            MenuRow { rowText: qsTr("Screenshot");    glyph: "\uF030"; onActivate: () => mpv.takeScreenshot() }
+            MenuRow { rowText: qsTr("Média megnyitása…"); glyph: "\uF07C"; onActivate: () => openDialog.open() }
+            MenuRow { rowText: qsTr("URL megnyitása…");   glyph: "\uF0AC"; onActivate: () => urlDialog.open() }
+            MenuRow { rowText: qsTr("Képernyőkép");       glyph: "\uF030"; onActivate: () => mpv.takeScreenshot() }
 
             Rectangle {
                 height: 1
@@ -309,17 +309,17 @@ ApplicationWindow {
             }
 
             MenuRow {
-                rowText: mpv.playing ? qsTr("Pause") : qsTr("Play")
+                rowText: mpv.playing ? qsTr("Szünet") : qsTr("Lejátszás")
                 glyph: mpv.playing ? "\uF04C" : "\uF04B"
                 onActivate: () => mpv.togglePause()
             }
             MenuRow {
-                rowText: root.isFullScreen ? qsTr("Exit fullscreen") : qsTr("Fullscreen")
+                rowText: root.isFullScreen ? qsTr("Kilépés a teljes képernyőből") : qsTr("Teljes képernyő")
                 glyph: "\uF065"
                 onActivate: () => root.toggleFullscreen()
             }
             MenuRow {
-                rowText: qsTr("Minimize to tray (peek)")
+                rowText: qsTr("Elrejtés a tálcára (peek)")
                 glyph: "\uF2D1"
                 onActivate: () => mpv.toggleMinimize()
             }
