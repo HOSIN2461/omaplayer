@@ -83,11 +83,14 @@ Item {
         anchors.topMargin: 8
         anchors.bottomMargin: 6
 
-        // --- control row ====  volume .. transport .. gear/menu ------
-        RowLayout {
+        // --- control rows ====  volume .. transport .. gear/menu ------
+        // The whole control cluster is centered in the pill instead of being
+        // stretched edge-to-edge, so it never crowds a narrow floating window.
+        Row {
+            anchors.horizontalCenter: parent.horizontalCenter
             spacing: 10
 
-            // Volume (top-left, above the timeline).
+            // Volume.
             IconButton {
                 id: volBtn
                 glyph: mpv.muted ? "\uF6A9"
@@ -100,7 +103,8 @@ Item {
 
             Slider {
                 id: volSlider
-                Layout.preferredWidth: 96
+                width: 96
+                height: 24
                 from: 0
                 to: 150
                 value: mpv.volume
@@ -141,9 +145,16 @@ Item {
                 }
             }
 
-            Item { Layout.fillWidth: true }
+            Item { width: 6; height: 1 }
 
-            // Transport — centered.
+            // Transport — previous / play / stop / next.
+            IconButton {
+                id: prevBtn
+                glyph: "\uF048"                                 // FA backward-step
+                tip: qsTr("Előző (P)")
+                onClicked: mpv.playlistPrevious()
+            }
+
             IconButton {
                 id: playBtn
                 glyph: mpv.playing ? "\uF04C" : "\uF04B"   // FA pause / play
@@ -158,21 +169,28 @@ Item {
                 onClicked: mpv.stop()
             }
 
-            Item { Layout.fillWidth: true }
+            IconButton {
+                id: nextBtn
+                glyph: "\uF051"                                 // FA forward-step
+                tip: qsTr("Következő (N)")
+                onClicked: mpv.playlistNext()
+            }
 
-            // Settings gear + hamburger menu — top-right.
+            Item { width: 6; height: 1 }
+
+            // Settings gear + hamburger menu.
             IconButton {
                 id: gearBtn
                 glyph: "\uF013"                                 // FA cog
                 tip: qsTr("Beállítások")
-                onClicked: { if (bar.onSettings) bar.onSettings(gearBtn) }
+                onClicked: { if (bar.onSettings) bar.onSettings() }
             }
 
             IconButton {
                 id: menuBtn
                 glyph: "\uF0C9"                                 // FA bars: playlist
                 tip: qsTr("Lejátszási lista")
-                onClicked: { if (bar.onPlaylist) bar.onPlaylist(menuBtn) }
+                onClicked: { if (bar.onPlaylist) bar.onPlaylist() }
             }
         }
 

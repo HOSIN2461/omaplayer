@@ -49,8 +49,8 @@ ApplicationWindow {
 
         // Direct wiring — the old parent-chain walk from the bar could not
         // reach these Main.qml methods and silently did nothing.
-        onSettings: (btn) => openSettingsAt(btn)
-        onPlaylist: (btn) => openPlaylistAt(btn)
+        onSettings: () => openSettings()
+        onPlaylist: () => openPlaylist()
         onRetouch: () => reTouch()
     }
 
@@ -301,33 +301,42 @@ ApplicationWindow {
             border.width: 1
         }
 
-        contentItem: Column {
-            spacing: 3
+        contentItem: Flickable {
+            clip: true
+            height: Math.min(col.implicitHeight, root.height - 24)
+            contentWidth: col.implicitWidth
+            contentHeight: col.implicitHeight
 
-            MenuRow { rowText: qsTr("Média megnyitása…"); glyph: "\uF07C"; onActivate: () => openDialog.open() }
-            MenuRow { rowText: qsTr("URL megnyitása…");   glyph: "\uF0AC"; onActivate: () => urlDialog.open() }
-            MenuRow { rowText: qsTr("Képernyőkép");       glyph: "\uF030"; onActivate: () => mpv.takeScreenshot() }
+            Column {
+                id: col
+                width: contextMenu.width - 12
+                spacing: 3
 
-            Rectangle {
-                height: 1
-                width: parent.width
-                color: Colors.border
-            }
+                MenuRow { rowText: qsTr("Média megnyitása…"); glyph: "\uF07C"; onActivate: () => openDialog.open() }
+                MenuRow { rowText: qsTr("URL megnyitása…");   glyph: "\uF0AC"; onActivate: () => urlDialog.open() }
+                MenuRow { rowText: qsTr("Képernyőkép");       glyph: "\uF030"; onActivate: () => mpv.takeScreenshot() }
 
-            MenuRow {
-                rowText: mpv.playing ? qsTr("Szünet") : qsTr("Lejátszás")
-                glyph: mpv.playing ? "\uF04C" : "\uF04B"
-                onActivate: () => mpv.togglePause()
-            }
-            MenuRow {
-                rowText: root.isFullScreen ? qsTr("Kilépés a teljes képernyőből") : qsTr("Teljes képernyő")
-                glyph: "\uF065"
-                onActivate: () => root.toggleFullscreen()
-            }
-            MenuRow {
-                rowText: qsTr("Elrejtés a tálcára (peek)")
-                glyph: "\uF2D1"
-                onActivate: () => mpv.toggleMinimize()
+                Rectangle {
+                    height: 1
+                    width: parent.width
+                    color: Colors.border
+                }
+
+                MenuRow {
+                    rowText: mpv.playing ? qsTr("Szünet") : qsTr("Lejátszás")
+                    glyph: mpv.playing ? "\uF04C" : "\uF04B"
+                    onActivate: () => mpv.togglePause()
+                }
+                MenuRow {
+                    rowText: root.isFullScreen ? qsTr("Kilépés a teljes képernyőből") : qsTr("Teljes képernyő")
+                    glyph: "\uF065"
+                    onActivate: () => root.toggleFullscreen()
+                }
+                MenuRow {
+                    rowText: qsTr("Elrejtés a tálcára (peek)")
+                    glyph: "\uF2D1"
+                    onActivate: () => mpv.toggleMinimize()
+                }
             }
         }
     }
@@ -340,34 +349,16 @@ ApplicationWindow {
         mpv.windowFullscreen(isFullScreen)
     }
 
-    // Places a popup next to a bar button (menu dropped below, panels lifted
-    // above the bar so they float over the video).
-    function positionMenu(menu, px, py, above) {
-        menu.x = Math.min(Math.max(6, px - menu.width), root.width - menu.width - 6)
-        if (above)
-            menu.y = Math.min(Math.max(6, py - menu.height + 4), root.height - menu.height - 6)
-        else
-            menu.y = Math.min(Math.max(6, py), root.height - menu.height - 6)
-        menu.open()
+    // The bar's settings gear → video colours / subtitles / audio drawer.
+    function openSettings() {
+        settingsMenu.open()
     }
 
-    // The bar's settings gear → video colours / subtitles / audio panel.
-    function openSettingsAt(btn) {
-        const pt = btn.mapToItem(root.contentItem, btn.width, btn.height + 6)
-        positionMenu(settingsMenu, pt.x, pt.y, true)
-    }
-
-    // The bar's playlist button (three lines) → refresh + lift the list panel.
-    function openPlaylistAt(btn) {
-        const items = mpv.playlistItems()
-        playlistModel.clear()
-        for (var i = 0; i < items.length; i++) {
-            playlistModel.append({ "title": items[i].title,
-                                   "path": items[i].path,
-                                   "current": items[i].current })
-        }
-        const pt = btn.mapToItem(root.contentItem, btn.width, btn.height + 6)
-        positionMenu(playlistPanel, pt.x, pt.y, true)
+    // The bar's playlist button (three lines) → refresh + open the list drawer.
+    function openPlaylist() {
+        playlistPanel.refresh()
+        playlistPanel.selectedIndex = -1
+        playlistPanel.open()
     }
 
     // --- open media ------------------------------------------------------------
@@ -509,11 +500,26 @@ ApplicationWindow {
     }
 
     // --- playlist panel (the bar's ≡ button) ---------------------------------
+    // A right-edge drawer: it never leaves the window, so it stays usable on
+    // the small floating player. It slides in/out along x and re-lays out the
+    // list vertically to fill the drawer height.
     Popup {
         id: playlistPanel
-        width: 340
+        modal: true
         padding: 6
         z: 50
+
+        x: root.width - width - 4
+        y: 4
+        width: Math.min(400, root.width - 8)
+        height: root.height - 8
+
+        enter: Transition {
+            NumberAnimation { property: "x"; from: root.width; duration: 250; easing.type: Easing.OutCubic }
+        }
+        exit: Transition {
+            NumberAnimation { property: "x"; to: root.width; duration: 210; easing.type: Easing.InCubic }
+        }
 
         // Row picked for Delete / Play — a playlist index (from the full mpv
         // list, not the filtered view), or -1 when nothing is selected.
@@ -527,11 +533,11 @@ ApplicationWindow {
             border.width: 1
         }
 
-        contentItem: Column {
+        contentItem: ColumnLayout {
             spacing: 6
 
             Row {
-                width: parent.width
+                Layout.fillWidth: true
                 spacing: 6
 
                 Text {
@@ -576,12 +582,23 @@ ApplicationWindow {
                     font.pixelSize: 11
                     color: Colors.textDim
                 }
+                Item { Layout.fillWidth: true }
+
+                // Close — the drawer also closes on outside click / Esc.
+                IconButton {
+                    id: plClose
+                    implicitWidth: 26
+                    implicitHeight: 26
+                    glyph: "\uF00D"                               // FA xmark
+                    tip: qsTr("Bezárás (Esc)")
+                    onClicked: playlistPanel.close()
+                }
             }
 
             TextField {
                 id: searchField
                 visible: false
-                width: parent.width
+                Layout.fillWidth: true
                 placeholderText: qsTr("Keresés a listában…")
                 placeholderTextColor: Colors.textDim
                 color: Colors.overlayText
@@ -602,8 +619,8 @@ ApplicationWindow {
 
             ListView {
                 id: playlistList
-                width: parent.width
-                height: Math.max(36, Math.min(320, filteredModel.count * 32 + 4))
+                Layout.fillWidth: true
+                Layout.fillHeight: true
                 clip: true
                 model: ListModel { id: filteredModel }
 
@@ -845,11 +862,27 @@ ApplicationWindow {
             refresh()
         }
     }
+    // --- settings panel (the bar's gear) -------------------------------
+    // A right-edge drawer like the playlist panel: it stays inside the window
+    // at any size (the subtitles block used to overflow out of the short
+    // floating window), and the body scrolls when the content is taller.
     Popup {
         id: settingsMenu
-        width: 380
+        modal: true
         padding: 6
         z: 50
+
+        x: root.width - width - 4
+        y: 4
+        width: Math.min(380, root.width - 8)
+        height: root.height - 8
+
+        enter: Transition {
+            NumberAnimation { property: "x"; from: root.width; duration: 250; easing.type: Easing.OutCubic }
+        }
+        exit: Transition {
+            NumberAnimation { property: "x"; to: root.width; duration: 210; easing.type: Easing.InCubic }
+        }
 
         background: Rectangle {
             radius: 12
@@ -858,125 +891,151 @@ ApplicationWindow {
             border.width: 1
         }
 
-        contentItem: Item {
-            width: settingsMenu.width - 12
-            implicitHeight: settingsCol.implicitHeight + 32
+        contentItem: ColumnLayout {
+            spacing: 6
 
-            ColumnLayout {
-                id: settingsCol
-                anchors.fill: parent
-                anchors.margins: 16
-                spacing: 9
+            Row {
+                Layout.fillWidth: true
+                spacing: 6
 
                 Text {
+                    anchors.verticalCenter: parent.verticalCenter
                     text: qsTr("Beállítások")
                     font.pixelSize: 15
                     font.weight: Font.DemiBold
                     color: Colors.overlayText
                 }
+                Item { Layout.fillWidth: true }
 
-                Text {
-                    text: qsTr("Lejátszás")
-                    font.pixelSize: 11
-                    font.weight: Font.DemiBold
-                    color: Colors.accent
+                // Close — the drawer also closes on outside click / Esc.
+                IconButton {
+                    id: setClose
+                    implicitWidth: 26
+                    implicitHeight: 26
+                    glyph: "\uF00D"                               // FA xmark
+                    tip: qsTr("Bezárás (Esc)")
+                    onClicked: settingsMenu.close()
                 }
-                ValueSlider { vsLabel: qsTr("Sebesség"); vsMin: 25; vsMax: 400; vsStep: 5;
-                              vsInteger: true; vsValue: Math.round(mpv.speed * 100);
-                              onChanged: v => mpv.speed = v / 100 }
+            }
 
-                Text {
-                    text: qsTr("Videó színek")
-                    font.pixelSize: 11
-                    font.weight: Font.DemiBold
-                    color: Colors.accent
-                }
-                ValueSlider { vsLabel: qsTr("Fényerő");     vsValue: mpv.brightness;
-                              onChanged: v => mpv.brightness = v }
-                ValueSlider { vsLabel: qsTr("Kontraszt");   vsValue: mpv.contrast;
-                              onChanged: v => mpv.contrast = v }
-                ValueSlider { vsLabel: qsTr("Telítettség"); vsValue: mpv.saturation;
-                              onChanged: v => mpv.saturation = v }
-                ValueSlider { vsLabel: qsTr("Gamma");       vsValue: mpv.gamma;
-                              onChanged: v => mpv.gamma = v }
+            Flickable {
+                id: settingsScroll
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                contentWidth: settingsCol.implicitWidth
+                contentHeight: settingsCol.implicitHeight
 
-                Text {
-                    text: qsTr("Feliratok")
-                    font.pixelSize: 11
-                    font.weight: Font.DemiBold
-                    color: Colors.accent
-                }
-                RowLayout {
+                ColumnLayout {
+                    id: settingsCol
+                    width: settingsScroll.width
+                    spacing: 9
+
                     Text {
-                        text: qsTr("Megjelenítés")
-                        color: Colors.overlayText
-                        font.pixelSize: 12
+                        text: qsTr("Lejátszás")
+                        font.pixelSize: 11
+                        font.weight: Font.DemiBold
+                        color: Colors.accent
                     }
-                    Item { Layout.fillWidth: true }
-                    Rectangle {
-                        id: subToggle
-                        Layout.preferredWidth: 58
-                        Layout.preferredHeight: 26
-                        radius: 13
-                        color: mpv.subtitlesVisible ? Colors.accent : Colors.hover
-                        Behavior on color { ColorAnimation { duration: 100 } }
-                        Text {
-                            anchors.centerIn: parent
-                            text: mpv.subtitlesVisible ? qsTr("Be") : qsTr("Ki")
-                            font.pixelSize: 12
-                            font.weight: Font.DemiBold
-                            color: mpv.subtitlesVisible ? "#0b0b0e" : Colors.textDim
-                        }
-                        MouseArea {
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            onClicked: mpv.toggleSubtitles()
-                        }
+                    ValueSlider { vsLabel: qsTr("Sebesség"); vsMin: 25; vsMax: 400; vsStep: 5;
+                                  vsInteger: true; vsValue: Math.round(mpv.speed * 100);
+                                  onChanged: v => mpv.speed = v / 100 }
+
+                    Text {
+                        text: qsTr("Videó színek")
+                        font.pixelSize: 11
+                        font.weight: Font.DemiBold
+                        color: Colors.accent
                     }
-                }
-                ValueSlider { vsLabel: qsTr("Betűméret"); vsMin: 50; vsMax: 200; vsStep: 5;
-                              vsInteger: true; vsValue: Math.round(mpv.subScale * 100);
-                              onChanged: v => mpv.subScale = v / 100 }
+                    ValueSlider { vsLabel: qsTr("Fényerő");     vsValue: mpv.brightness;
+                                  onChanged: v => mpv.brightness = v }
+                    ValueSlider { vsLabel: qsTr("Kontraszt");   vsValue: mpv.contrast;
+                                  onChanged: v => mpv.contrast = v }
+                    ValueSlider { vsLabel: qsTr("Telítettség"); vsValue: mpv.saturation;
+                                  onChanged: v => mpv.saturation = v }
+                    ValueSlider { vsLabel: qsTr("Gamma");       vsValue: mpv.gamma;
+                                  onChanged: v => mpv.gamma = v }
 
-                Text {
-                    text: qsTr("Hang")
-                    font.pixelSize: 11
-                    font.weight: Font.DemiBold
-                    color: Colors.accent
-                }
-                ValueSlider { vsLabel: qsTr("Késleltetés"); vsMin: -2000; vsMax: 2000; vsStep: 100;
-                              vsInteger: true; vsValue: Math.round(mpv.audioDelay * 1000);
-                              onChanged: v => mpv.audioDelay = v / 1000 }
-
-                RowLayout {
-                    Item { Layout.fillWidth: true }
-                    Rectangle {
-                        id: resetBtn
-                        Layout.preferredWidth: 120
-                        Layout.preferredHeight: 30
-                        radius: 15
-                        color: resetMouse.containsMouse ? Colors.hover : "transparent"
+                    Text {
+                        text: qsTr("Feliratok")
+                        font.pixelSize: 11
+                        font.weight: Font.DemiBold
+                        color: Colors.accent
+                    }
+                    RowLayout {
                         Text {
-                            anchors.centerIn: parent
-                            text: qsTr("Alaphelyzet")
+                            text: qsTr("Megjelenítés")
+                            color: Colors.overlayText
                             font.pixelSize: 12
-                            color: resetMouse.containsMouse ? Colors.overlayText : Colors.textDim
                         }
-                        MouseArea {
-                            id: resetMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            onClicked: {
-                                mpv.speed = 1.0
-                                mpv.brightness = 0
-                                mpv.contrast = 0
-                                mpv.saturation = 0
-                                mpv.gamma = 0
-                                mpv.subScale = 1.0
-                                mpv.audioDelay = 0
+                        Item { Layout.fillWidth: true }
+                        Rectangle {
+                            id: subToggle
+                            Layout.preferredWidth: 58
+                            Layout.preferredHeight: 26
+                            radius: 13
+                            color: mpv.subtitlesVisible ? Colors.accent : Colors.hover
+                            Behavior on color { ColorAnimation { duration: 100 } }
+                            Text {
+                                anchors.centerIn: parent
+                                text: mpv.subtitlesVisible ? qsTr("Be") : qsTr("Ki")
+                                font.pixelSize: 12
+                                font.weight: Font.DemiBold
+                                color: mpv.subtitlesVisible ? "#0b0b0e" : Colors.textDim
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                onClicked: mpv.toggleSubtitles()
                             }
                         }
                     }
+                    ValueSlider { vsLabel: qsTr("Betűméret"); vsMin: 50; vsMax: 200; vsStep: 5;
+                                  vsInteger: true; vsValue: Math.round(mpv.subScale * 100);
+                                  onChanged: v => mpv.subScale = v / 100 }
+
+                    Text {
+                        text: qsTr("Hang")
+                        font.pixelSize: 11
+                        font.weight: Font.DemiBold
+                        color: Colors.accent
+                    }
+                    ValueSlider { vsLabel: qsTr("Késleltetés"); vsMin: -2000; vsMax: 2000; vsStep: 100;
+                                  vsInteger: true; vsValue: Math.round(mpv.audioDelay * 1000);
+                                  onChanged: v => mpv.audioDelay = v / 1000 }
+
+                    RowLayout {
+                        Layout.topMargin: 4
+                        Item { Layout.fillWidth: true }
+                        Rectangle {
+                            id: resetBtn
+                            Layout.preferredWidth: 120
+                            Layout.preferredHeight: 30
+                            radius: 15
+                            color: resetMouse.containsMouse ? Colors.hover : "transparent"
+                            Text {
+                                anchors.centerIn: parent
+                                text: qsTr("Alaphelyzet")
+                                font.pixelSize: 12
+                                color: resetMouse.containsMouse ? Colors.overlayText : Colors.textDim
+                            }
+                            MouseArea {
+                                id: resetMouse
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                onClicked: {
+                                    mpv.speed = 1.0
+                                    mpv.brightness = 0
+                                    mpv.contrast = 0
+                                    mpv.saturation = 0
+                                    mpv.gamma = 0
+                                    mpv.subScale = 1.0
+                                    mpv.audioDelay = 0
+                                }
+                            }
+                        }
+                    }
+                    Item { height: 8 }
                 }
             }
         }
@@ -1011,6 +1070,10 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+F"; onActivated: searchToggle.clicked() }
     Shortcut { sequence: "Ctrl+O"; onActivated: openDialog.open() }
     Shortcut { sequence: "Ctrl+S"; onActivated: mpv.takeScreenshot() }
-    Shortcut { sequence: "Esc"; onActivated: { if (root.isFullScreen) { root.isFullScreen = false; mpv.windowFullscreen(false) } } }
+    Shortcut { sequence: "Esc"; onActivated: {
+        if (settingsMenu.visible) { settingsMenu.close(); return }
+        if (playlistPanel.visible) { playlistPanel.close(); return }
+        if (root.isFullScreen) { root.isFullScreen = false; mpv.windowFullscreen(false) }
+    } }
     Shortcut { sequence: "Ctrl+0"; onActivated: mpv.setVolume(100) }
 }

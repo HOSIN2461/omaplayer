@@ -29,10 +29,9 @@ int main(int argc, char *argv[])
     QGuiApplication app(argc, argv);
     fprintf(stderr, "BOOT app-ctor done\n");
     fflush(stderr);
-    // PiP toggles the window set (one hides while the other maps), which must
-    // not end the session just because no window happens to be visible in that
-    // instant.
-    QGuiApplication::setQuitOnLastWindowClosed(false);
+    // The player is a single floating window (the PiP window-set toggle was
+    // removed), so the default "quit when the (last) window closes" applies —
+    // closing the window stops playback and exits the app.
 
     // libmpv refuses to create a handle while LC_NUMERIC is non-C (it would
     // misparse decimals). Qt resets the locale from the environment, so force
