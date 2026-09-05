@@ -118,14 +118,17 @@ int main(int argc, char *argv[])
     }
 
     // IINA-style usage: `omaplayer <file-or-url>...` (options start with `--`
-    // and must be skipped before picking the media path).
+    // and must be skipped before picking the media path). The first file is
+    // played, the rest are appended to the playlist.
+    QStringList args;
     for (int i = 1; i < argc; i++) {
         const QString arg = QString::fromLocal8Bit(argv[i]);
-if (arg.startsWith(QLatin1String("--")))
+        if (arg.startsWith(QLatin1String("--")))
             continue;
-        MpvCore::instance()->open(arg);
-        break;
+        args << arg;
     }
+    if (!args.isEmpty())
+        MpvCore::instance()->openList(args);
 
     return app.exec();
 }

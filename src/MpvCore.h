@@ -74,6 +74,7 @@ public:
     Q_INVOKABLE bool hasPrevious();
     Q_INVOKABLE void playlistNext();
     Q_INVOKABLE void playlistPrevious();
+    Q_INVOKABLE void playAt(int index);
     Q_INVOKABLE void setLoopStatus(const QString &status);
     Q_INVOKABLE QString loopStatus();
     Q_INVOKABLE void removePlaylistItem(int index);
@@ -127,6 +128,7 @@ signals:
     void gammaChanged(double value);
     void subScaleChanged(double value);
     void audioDelayChanged(double value);
+    void currentIndexChanged(int index);
 
 public:
     static void wakeupCallback(void *context);

@@ -253,6 +253,7 @@ Item {
                 id: seek
                 property bool dragging: false
                 property real target: 0.0
+                property bool pausedForSeek: false
 
                 anchors.fill: parent
                 hoverEnabled: true
@@ -260,6 +261,9 @@ Item {
                 onPressed: mouse => {
                     dragging = true
                     setFromMouse(mouse.x)
+                    // Pause only while dragging so the position preview stays
+                    // stable; resume right after the seek if it was playing.
+                    pausedForSeek = mpv.playing
                     mpv.pause()
                 }
                 onPositionChanged: mouse => {
@@ -268,10 +272,20 @@ Item {
                     seekTip.position = clampRatio(mouse.x / parent.width)
                 }
                 onReleased: {
-                    if (dragging) {
-                        mpv.seek(target)
-                        dragging = false
-                    }
+                    if (dragging)
+                        finishSeek()
+                }
+                onCanceled: {
+                    if (dragging)
+                        finishSeek()
+                }
+
+                function finishSeek() {
+                    mpv.seek(target)
+                    if (pausedForSeek)
+                        mpv.play()
+                    pausedForSeek = false
+                    dragging = false
                 }
 
                 function setFromMouse(x) {
@@ -306,9 +320,10 @@ Item {
             }
         }
 
-        // --- time readout, centered under the scrubber ---------------------
+        // --- time readout, at the left edge under the scrubber -------------------
         Text {
-            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.left: parent.left
+            anchors.leftMargin: 2
             text: fmtTime(mpv.position) + " / " + fmtTime(mpv.duration)
             color: Colors.textDim
             font.pixelSize: 11

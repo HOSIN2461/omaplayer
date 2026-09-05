@@ -78,6 +78,7 @@ ApplicationWindow {
         anchors.fill: parent
         z: 1
         acceptedButtons: Qt.LeftButton | Qt.RightButton
+        hoverEnabled: true
 
         onClicked: mouse => {
             bar.show()
@@ -107,10 +108,10 @@ ApplicationWindow {
                 mpv.setVolume(Math.max(0, Math.min(150, mpv.volume + delta / 8)))
         }
 
-        // Hover over the bottom strip reveals the bar; anything else auto-hides.
+        // Any mouse movement over the player surfaces the controls; they fade
+        // away again once the auto-hide timer elapses while idle.
         onPositionChanged: mouse => {
-            if (mouse.y > root.height - 84)
-                bar.show()
+            bar.show()
         }
     }
 
@@ -356,6 +357,8 @@ ApplicationWindow {
 
     // --- fullscreen / window state --------------------------------------------
     property bool isFullScreen: false
+    // Both side drawers share one width so they swap size-for-size.
+    readonly property real drawerWidth: Math.max(240, Math.min(380, Math.round(root.width * 0.62)))
 
     function toggleFullscreen() {
         isFullScreen = !isFullScreen
@@ -363,12 +366,15 @@ ApplicationWindow {
     }
 
     // The bar's settings gear → video colours / subtitles / audio drawer.
+    // Only one drawer may be open at a time: opening one dismisses the other.
     function openSettings() {
+        playlistPanel.visible = false
         settingsMenu.open()
     }
 
     // The bar's playlist button (three lines) → refresh + open the list drawer.
     function openPlaylist() {
+        settingsMenu.visible = false
         playlistPanel.refresh()
         playlistPanel.selectedIndex = -1
         playlistPanel.open()
@@ -537,8 +543,9 @@ ApplicationWindow {
 
         x: root.width - width - 4
         y: 4
-        width: Math.max(240, Math.min(400, Math.round(root.width * 0.62)))
-        height: root.height - 8
+        width: root.drawerWidth
+        // Stops above the control bar so the transport row stays reachable.
+        height: root.height - 124
 
         // A plain in-window panel instead of a Popup: an Overlay popup becomes
         // a native xdg-popup surface on Wayland and steals the keyboard focus
@@ -726,7 +733,7 @@ ApplicationWindow {
                             playlistPanel.selectedIndex = model.realIndex
                         }
                         onDoubleClicked: {
-                            mpv.open(model.path)
+                            mpv.playAt(model.realIndex)
                             playlistPanel.close()
                         }
                         onReleased: {
@@ -902,6 +909,16 @@ ApplicationWindow {
             playlistPanel.selectedIndex = -1
             refresh()
         }
+
+        // While the drawer is open, follow the playing entry (N/P, auto-next,
+        // playAt) live so the highlighted row always tracks the video.
+        Connections {
+            target: mpv
+            function onCurrentIndexChanged(index) {
+                if (playlistPanel.visible)
+                    playlistPanel.refresh()
+            }
+        }
     }
     // --- settings panel (the bar's gear) -------------------------------
     // A right-edge drawer like the playlist panel: it stays inside the window
@@ -914,8 +931,9 @@ ApplicationWindow {
 
         x: root.width - width - 4
         y: 4
-        width: Math.max(240, Math.min(380, Math.round(root.width * 0.62)))
-        height: root.height - 8
+        width: root.drawerWidth
+        // Stops above the control bar so the transport row stays reachable.
+        height: root.height - 124
 
         // Plain in-window panel — see playlistPanel: no native popup surface,
         // keyboard focus (and G/L/Esc) stay on the main window.

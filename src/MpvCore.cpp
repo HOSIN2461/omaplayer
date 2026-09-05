@@ -91,6 +91,7 @@ MpvCore::MpvCore(QObject *parent)
     mpv_observe_property(m_handle, 0, "gamma", MPV_FORMAT_DOUBLE);
     mpv_observe_property(m_handle, 0, "sub-scale", MPV_FORMAT_DOUBLE);
     mpv_observe_property(m_handle, 0, "audio-delay", MPV_FORMAT_DOUBLE);
+    mpv_observe_property(m_handle, 0, "playlist-pos", MPV_FORMAT_INT64);
 
     mpv_set_wakeup_callback(m_handle, &MpvCore::wakeupCallback, this);
     mpv_request_log_messages(m_handle, "warn");
@@ -347,6 +348,9 @@ void MpvCore::handleWakeup()
                     m_audioDelay = value;
                     Q_EMIT audioDelayChanged(m_audioDelay);
                 }
+            } else if (prop->format == MPV_FORMAT_INT64 && std::strcmp(name, "playlist-pos") == 0) {
+                if (prop->data)
+                    Q_EMIT currentIndexChanged(static_cast<int>(*static_cast<long long *>(prop->data)));
             }
             break;
         }
@@ -701,6 +705,17 @@ void MpvCore::playlistPrevious()
 {
     if (m_handle)
         mpv_command_string(m_handle, "playlist-prev");
+}
+
+void MpvCore::playAt(int index)
+{
+    if (!m_handle)
+        return;
+    // Switch to the entry at that index in place — the rest of the playlist
+    // stays intact (loadfile would have collapsed it to that one file).
+    qint64 pos = index;
+    mpv_set_property(m_handle, "playlist-pos", MPV_FORMAT_INT64, &pos);
+    mpv_set_property_string(m_handle, "pause", "no");
 }
 
 void MpvCore::setLoopStatus(const QString &status)
