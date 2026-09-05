@@ -21,6 +21,10 @@ magyar felülettel.
 - **Beállítások**: hangerő/speeds, fényerő/kontraszt/telítettség/gamma,
   felirat-méret, hang-késleltetés, feliratok ki/be
 - **MPRIS** (D-Bus) — media-kulcsok, GNOME/Wayland média-integráció
+- **Elrejtés a tálcára**: jobb gomb → menüpont (a lejátszás közben a
+  StatusNotifier-alapú tálcaikonra kerül; kattintás visszahozza, jobb-gombos
+  menüjében lejátszás/szünet, előző/következő és kilépés). Ha nincs tálca
+  (nincs StatusNotifier-host), minimalizálásra esik vissza
 - **Képernyőkép** `Ctrl+S`-re
 - `yt-dlp` telepítése esetén webes források (YouTube stb.) is lejátszhatók
 

@@ -6,9 +6,11 @@
 #include <QtQmlIntegration>
 #include <functional>
 
+class QMenu;
 class QOpenGLContext;
 class QQuickItem;
 class QQuickWindow;
+class QSystemTrayIcon;
 
 extern "C" {
 #include <mpv/client.h>
@@ -92,6 +94,7 @@ public:
     Q_INVOKABLE void toggleFullscreen();
     Q_INVOKABLE bool isFullscreen();
     Q_INVOKABLE void toggleMinimize();
+    Q_INVOKABLE void hideToTray();
     Q_INVOKABLE void windowFullscreen(bool on);
     Q_INVOKABLE void takeScreenshot();
     Q_INVOKABLE void toggleSubtitles();
@@ -111,6 +114,10 @@ public:
     // renders into; the mpv frame-update callback repaints exactly that window.
     void setRenderWindow(QQuickWindow *window);
     void setRenderItem(QQuickItem *item);
+
+private:
+    void setupTray();
+    void restoreFromTray();
 
 signals:
     void playingChanged(bool playing);
@@ -142,6 +149,7 @@ public:
     QOpenGLContext *m_renderGlContext = nullptr; // context the render ctx was built on
     QPointer<QQuickWindow> m_renderWindow;
     QPointer<QQuickItem> m_renderItem;
+    QPointer<QSystemTrayIcon> m_tray;
     bool m_pendingOpen = false;
     QString m_pendingLocation;
     QStringList m_pendingFiles;

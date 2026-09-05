@@ -10,6 +10,10 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QRegularExpression>
+#include <QIcon>
+#include <QMenu>
+#include <QSystemTrayIcon>
+#include <QWindow>
 #include <functional>
 
 #include <cstring>
@@ -182,6 +186,8 @@ mpv_render_context *MpvCore::renderContext()
 void MpvCore::setRenderWindow(QQuickWindow *window)
 {
     m_renderWindow = window;
+    if (window)
+        setupTray();
 }
 
 void MpvCore::setRenderItem(QQuickItem *item)
@@ -546,6 +552,78 @@ void MpvCore::toggleMinimize()
 {
     if (m_renderWindow)
         m_renderWindow->setVisibility(QWindow::Minimized);
+}
+
+void MpvCore::setupTray()
+{
+    if (m_tray)
+        return;
+
+    m_tray = new QSystemTrayIcon(this);
+    QIcon icon = QIcon::fromTheme(QStringLiteral("omaplayer"),
+                                  QIcon::fromTheme(QStringLiteral("multimedia-player")));
+    m_tray->setIcon(icon);
+    m_tray->setToolTip(QStringLiteral("omaplayer"));
+
+    auto *menu = new QMenu();
+    auto *actPlayPause = menu->addAction(QStringLiteral("Lejátszás / Szünet"));
+    auto *actPrev = menu->addAction(QStringLiteral("Előző"));
+    auto *actNext = menu->addAction(QStringLiteral("Következő"));
+    menu->addSeparator();
+    auto *actShow = menu->addAction(QStringLiteral("Ablak megjelenítése"));
+    menu->addSeparator();
+    auto *actQuit = menu->addAction(QStringLiteral("Kilépés"));
+
+    connect(actPlayPause, &QAction::triggered, this,
+            [this] { togglePause(); });
+    connect(actPrev, &QAction::triggered, this, [this] {
+        if (hasPrevious())
+            playlistPrevious();
+    });
+    connect(actNext, &QAction::triggered, this, [this] {
+        if (hasNext())
+            playlistNext();
+    });
+    connect(actShow, &QAction::triggered, this, [this] {
+        if (m_renderWindow && m_renderWindow->visibility() == QWindow::Hidden)
+            restoreFromTray();
+        else
+            hideToTray();
+    });
+    connect(actQuit, &QAction::triggered,
+            [this] { QCoreApplication::quit(); });
+
+    m_tray->setContextMenu(menu);
+    connect(m_tray, &QSystemTrayIcon::activated, this,
+            [this](QSystemTrayIcon::ActivationReason reason) {
+                if (reason == QSystemTrayIcon::Trigger
+                    || reason == QSystemTrayIcon::DoubleClick)
+                    restoreFromTray();
+            });
+}
+
+void MpvCore::restoreFromTray()
+{
+    if (m_renderWindow) {
+        if (m_renderWindow->visibility() == QWindow::Hidden)
+            m_renderWindow->show();
+        m_renderWindow->raise();
+        m_renderWindow->requestActivate();
+    }
+    if (m_tray)
+        m_tray->hide();
+}
+
+void MpvCore::hideToTray()
+{
+    if (!QSystemTrayIcon::isSystemTrayAvailable()) {
+        toggleMinimize(); // no tray host — at least get out of the way
+        return;
+    }
+    if (m_tray)
+        m_tray->show();
+    if (m_renderWindow)
+        m_renderWindow->hide();
 }
 
 bool MpvCore::isFullscreen()

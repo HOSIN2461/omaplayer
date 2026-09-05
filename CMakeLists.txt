@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.28)
-project(omaplayer VERSION 0.1.1 LANGUAGES CXX)
+project(omaplayer VERSION 0.1.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Quick QuickControls2 DBus)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Quick QuickControls2 DBus Widgets)
 find_package(PkgConfig REQUIRED)
 # The libmpv client library (mpv render API + property/command API).
 pkg_check_modules(MPV REQUIRED IMPORTED_TARGET mpv)
@@ -41,6 +41,7 @@ target_link_libraries(omaplayer PRIVATE
     Qt6::Gui
     Qt6::Quick
     Qt6::QuickControls2
+    Qt6::Widgets
     Qt6::DBus
     PkgConfig::MPV
 )

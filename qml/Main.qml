@@ -347,9 +347,9 @@ ApplicationWindow {
                     onActivate: () => root.toggleFullscreen()
                 }
                 MenuRow {
-                    rowText: qsTr("Elrejtés a tálcára (peek)")
+                    rowText: qsTr("Elrejtés a tálcára")
                     glyph: "\uF2D1"
-                    onActivate: () => mpv.toggleMinimize()
+                    onActivate: () => mpv.hideToTray()
                 }
             }
         }

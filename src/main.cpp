@@ -1,4 +1,4 @@
-#include <QGuiApplication>
+#include <QApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQmlError>
@@ -34,20 +34,22 @@ int main(int argc, char *argv[])
     // appear (intrinsic GTK chooser construction) — accepted.
     qputenv("QT_QPA_PLATFORMTHEME", "gtk3");
 
-    QGuiApplication app(argc, argv);
+    QApplication app(argc, argv);
     fprintf(stderr, "BOOT app-ctor done\n");
     fflush(stderr);
     // The player is a single floating window (the PiP window-set toggle was
     // removed), so the default "quit when the (last) window closes" applies —
-    // closing the window stops playback and exits the app.
-
+    // closing the window stops playback and exits the app (the tray menu's
+    // "Kilépés" quits explicitly while hidden in the tray).
+    fprintf(stderr, "BOOT app-ctor done\n");
+    fflush(stderr);
     // libmpv refuses to create a handle while LC_NUMERIC is non-C (it would
     // misparse decimals). Qt resets the locale from the environment, so force
-    // the C numeric locale back after QGuiApplication was constructed.
+    // the C numeric locale back after QApplication was constructed.
     std::setlocale(LC_NUMERIC, "C");
     QCoreApplication::setApplicationName(QStringLiteral("omaplayer"));
     QCoreApplication::setOrganizationName(QStringLiteral("omarchy"));
-    QCoreApplication::setApplicationVersion(QStringLiteral("0.1.1"));
+    QCoreApplication::setApplicationVersion(QStringLiteral("0.1.2"));
 
     // Qt Quick must render through OpenGL for the libmpv OpenGL render API.
     QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
