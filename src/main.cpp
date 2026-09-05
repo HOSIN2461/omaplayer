@@ -25,6 +25,11 @@ int main(int argc, char *argv[])
     // is honored earlier and avoids the crash, so set it before the
     // QGuiApplication is constructed.
     qputenv("QSG_RHI_BACKEND", "opengl");
+    // The omarchy gtk3 platform theme turns every QML FileDialog into a native
+    // GTK picker that takes well over half a second to appear (file listing +
+    // icon loading). Our own Qt-styled dialog renders in ~150 ms, so drop the
+    // platform theme for this app (the in-app look is self-styled anyway).
+    qputenv("QT_QPA_PLATFORMTHEME", "");
 
     QGuiApplication app(argc, argv);
     fprintf(stderr, "BOOT app-ctor done\n");
