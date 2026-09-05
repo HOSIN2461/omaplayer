@@ -25,12 +25,14 @@ int main(int argc, char *argv[])
     // is honored earlier and avoids the crash, so set it before the
     // QGuiApplication is constructed.
     qputenv("QSG_RHI_BACKEND", "opengl");
-    // The omarchy gtk3 platform theme turns every QML FileDialog into a native
-    // GTK picker. It is slower to appear (~0.6 s; file chooser construction is
-    // intrinsic, not theme-bound) than Qt's own fallback dialog, but the GTK
-    // chooser is the only variant that truly multi-selects — and group add
-    // depends on that. Keep the native dialog for the sake of multi-select.
-    // (Do NOT qputenv("QT_QPA_PLATFORMTHEME", "") here — that kills multi-select.)
+    // File dialogs must be the native GTK chooser: it is the only variant that
+    // truly multi-selects (QML FileDialog's Qt fallback is single-select), and
+    // group add depends on multi-select. The gtk3 QPA platform theme is not
+    // guaranteed to be exported by the desktop session (this app is often
+    // started from a launcher), so force it here. The theme package ships as
+    // part of qt6-base, so it is always available. The dialog takes ~0.6 s to
+    // appear (intrinsic GTK chooser construction) — accepted.
+    qputenv("QT_QPA_PLATFORMTHEME", "gtk3");
 
     QGuiApplication app(argc, argv);
     fprintf(stderr, "BOOT app-ctor done\n");
