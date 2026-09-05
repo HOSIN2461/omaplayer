@@ -303,12 +303,13 @@ ApplicationWindow {
 
         contentItem: Flickable {
             clip: true
-            height: Math.min(col.implicitHeight, root.height - 24)
-            contentWidth: col.implicitWidth
-            contentHeight: col.implicitHeight
+            implicitHeight: Math.min(ctxCol.implicitHeight, root.height - 24)
+            height: implicitHeight
+            contentWidth: ctxCol.implicitWidth
+            contentHeight: ctxCol.implicitHeight
 
             Column {
-                id: col
+                id: ctxCol
                 width: contextMenu.width - 12
                 spacing: 3
 
