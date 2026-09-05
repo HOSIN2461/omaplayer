@@ -264,7 +264,7 @@ ApplicationWindow {
         minimumWidth: 160
         minimumHeight: 90
         color: "black"
-        title: "PiP: " + (mpv.mediaTitle.length > 0 ? mpv.mediaTitle : "Omaplayer")
+        title: qsTr("PiP: %1").arg(mpv.mediaTitle.length > 0 ? mpv.mediaTitle : qsTr("Omaplayer"))
 
         flags: Qt.Window | Qt.FramelessWindowHint
                | Qt.WindowStaysOnTopHint

@@ -3,6 +3,7 @@
 #include <QQmlContext>
 #include <QQuickWindow>
 #include <QLocale>
+#include <QLibraryInfo>
 #include <QTranslator>
 #include <QDir>
 #include <clocale>
@@ -37,11 +38,36 @@ int main(int argc, char *argv[])
 
     QTranslator translator;
     const QStringList langs = QLocale::system().uiLanguages();
+    auto baseFor = [](const QString &lang) -> QString {
+        return lang == QLatin1String("hu")
+                   ? QStringLiteral("hu")
+                   : QLocale(lang).name().toLower();
+    };
+
+    // Qt's own dialogs/controls text (OK, Cancel, file-picker buttons, …)
+    // needs its translations too; load those first so the app's own
+    // translator below wins any conflict over the same source text.
+    const QString qtTranslationsDir = QLibraryInfo::path(QLibraryInfo::TranslationsPath);
+    const QStringList qtBases = { QStringLiteral("qtbase_"),
+                                  QStringLiteral("qt_"),
+                                  QStringLiteral("qtdeclarative_") };
     for (const QString &lang : langs) {
-        const QString base = lang == QLatin1String("hu")
-                                 ? QStringLiteral("hu")
-                                 : QLocale(lang).name().toLower();
-        if (translator.load(QStringLiteral(":/translations/%1.qm").arg(base))) {
+        bool qtLoaded = false;
+        for (const QString &base : qtBases) {
+            auto *qt = new QTranslator(&app);
+            if (qt->load(base + baseFor(lang), qtTranslationsDir)) {
+                app.installTranslator(qt);
+                qtLoaded = true;
+            } else {
+                delete qt;
+            }
+        }
+        if (qtLoaded)
+            break;
+    }
+
+    for (const QString &lang : langs) {
+        if (translator.load(QStringLiteral(":/translations/%1.qm").arg(baseFor(lang)))) {
             app.installTranslator(&translator);
             break;
         }

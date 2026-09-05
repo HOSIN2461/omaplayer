@@ -28,86 +28,92 @@
     <name>Main</name>
     <message>
         <location filename="../qml/Main.qml" line="63"/>
+        <location filename="../qml/Main.qml" line="267"/>
         <source>Omaplayer</source>
         <translation>Omaplayer</translation>
     </message>
     <message>
-        <location filename="../qml/Main.qml" line="139"/>
+        <location filename="../qml/Main.qml" line="140"/>
         <source>Open media…</source>
         <translation>Megnyitás…</translation>
     </message>
     <message>
-        <location filename="../qml/Main.qml" line="143"/>
+        <location filename="../qml/Main.qml" line="144"/>
         <source>Open URL…</source>
         <translation>URL megnyitása…</translation>
     </message>
     <message>
-        <location filename="../qml/Main.qml" line="147"/>
+        <location filename="../qml/Main.qml" line="148"/>
         <source>Screenshot</source>
         <translation>Képernyőkép</translation>
     </message>
     <message>
-        <location filename="../qml/Main.qml" line="151"/>
+        <location filename="../qml/Main.qml" line="152"/>
         <source>Exit PiP</source>
         <translation>Kilépés a kis képből</translation>
     </message>
     <message>
-        <location filename="../qml/Main.qml" line="151"/>
+        <location filename="../qml/Main.qml" line="152"/>
         <source>Picture-in-Picture</source>
         <translation>Kis kép a képen</translation>
     </message>
     <message>
-        <location filename="../qml/Main.qml" line="156"/>
+        <location filename="../qml/Main.qml" line="157"/>
         <source>Pause</source>
         <translation>Szünet</translation>
     </message>
     <message>
-        <location filename="../qml/Main.qml" line="156"/>
+        <location filename="../qml/Main.qml" line="157"/>
         <source>Play</source>
         <translation>Lejátszás</translation>
     </message>
     <message>
-        <location filename="../qml/Main.qml" line="160"/>
+        <location filename="../qml/Main.qml" line="161"/>
         <source>Exit fullscreen</source>
         <translation>Kilépés a teljes képernyőből</translation>
     </message>
     <message>
-        <location filename="../qml/Main.qml" line="160"/>
+        <location filename="../qml/Main.qml" line="161"/>
         <source>Fullscreen</source>
         <translation>Teljes képernyő</translation>
     </message>
     <message>
-        <location filename="../qml/Main.qml" line="205"/>
+        <location filename="../qml/Main.qml" line="206"/>
         <source>Open media</source>
         <translation>Fájl megnyitása</translation>
     </message>
     <message>
-        <location filename="../qml/Main.qml" line="207"/>
+        <location filename="../qml/Main.qml" line="208"/>
         <source>Media files (%1)</source>
         <translation>Médiafájlok (%1)</translation>
     </message>
     <message>
-        <location filename="../qml/Main.qml" line="208"/>
+        <location filename="../qml/Main.qml" line="209"/>
         <source>All files (*)</source>
         <translation>Minden fájl (*)</translation>
     </message>
     <message>
-        <location filename="../qml/Main.qml" line="215"/>
+        <location filename="../qml/Main.qml" line="216"/>
         <source>Open URL</source>
         <translation>URL megnyitása</translation>
     </message>
     <message>
-        <location filename="../qml/Main.qml" line="222"/>
+        <location filename="../qml/Main.qml" line="223"/>
         <source>https://…</source>
         <translation>https://…</translation>
     </message>
     <message>
-        <location filename="../qml/Main.qml" line="303"/>
+        <location filename="../qml/Main.qml" line="267"/>
+        <source>PiP: %1</source>
+        <translation>Kis kép: %1</translation>
+    </message>
+    <message>
+        <location filename="../qml/Main.qml" line="304"/>
         <source>Omaplayer — kis kép a képen</source>
         <translation>Omaplayer — kis kép a képen</translation>
     </message>
     <message>
-        <location filename="../qml/Main.qml" line="311"/>
+        <location filename="../qml/Main.qml" line="312"/>
         <source>Bezárás (PiP kilépés)</source>
         <translation>Bezárás (PiP kilépés)</translation>
     </message>
