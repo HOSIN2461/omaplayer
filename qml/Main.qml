@@ -347,7 +347,7 @@ ApplicationWindow {
 
     // The bar's settings gear → video colours / subtitles / audio panel.
     function openSettingsAt(btn) {
-        const pt = btn.mapToItem(root, btn.width, btn.height + 6)
+        const pt = btn.mapToItem(root.contentItem, btn.width, btn.height + 6)
         positionMenu(settingsMenu, pt.x, pt.y, true)
     }
 
@@ -360,7 +360,7 @@ ApplicationWindow {
                                    "path": items[i].path,
                                    "current": items[i].current })
         }
-        const pt = btn.mapToItem(root, btn.width, btn.height + 6)
+        const pt = btn.mapToItem(root.contentItem, btn.width, btn.height + 6)
         positionMenu(playlistPanel, pt.x, pt.y, true)
     }
 
@@ -1005,6 +1005,6 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+F"; onActivated: searchToggle.clicked() }
     Shortcut { sequence: "Ctrl+O"; onActivated: openDialog.open() }
     Shortcut { sequence: "Ctrl+S"; onActivated: mpv.takeScreenshot() }
-    Shortcut { sequence: "Esc"; onActivated: { root.isFullScreen = false; mpv.windowFullscreen(false) } }
+    Shortcut { sequence: "Esc"; onActivated: { if (root.isFullScreen) { root.isFullScreen = false; mpv.windowFullscreen(false) } } }
     Shortcut { sequence: "Ctrl+0"; onActivated: mpv.setVolume(100) }
 }

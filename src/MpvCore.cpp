@@ -5,6 +5,12 @@
 #include <QQuickItem>
 #include <QFile>
 #include <QTextStream>
+#include <QProcess>
+#include <QTimer>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QRegularExpression>
+#include <functional>
 
 #include <cstring>
 namespace {
@@ -465,10 +471,71 @@ void MpvCore::toggleFullscreen()
     mpv_command_string(m_handle, "cycle fullscreen");
 }
 
+namespace {
+void dispatchHypr(const QStringList &args)
+{
+    QProcess::startDetached("hyprctl", args);
+}
+} // namespace
+
+// Runs `hyprctl -j activewindow`, waits until the key holds the expected
+// value, then invokes `then`. Polls every 50 ms; gives up after `timeoutMs`.
+void MpvCore::whenHyprState(const QString &key, const char *value, bool isBool,
+                            int timeoutMs, const std::function<void()> &then)
+{
+    auto *p = new QProcess;
+    p->setProcessChannelMode(QProcess::MergedChannels);
+    QObject::connect(p, &QProcess::finished, this, [this, p, key, value, isBool, timeoutMs, then] {
+        const QJsonObject o = QJsonDocument::fromJson(p->readAll()).object();
+        p->deleteLater();
+        bool matched = false;
+        if (isBool) {
+            const bool expectTrue = (QLatin1String(value) == QLatin1String("true"));
+            matched = o.value(key).toBool() == expectTrue;
+        } else {
+            matched = o.value(key).toVariant().toString() == QLatin1String(value);
+        }
+        if (matched) {
+            then();
+        } else if (timeoutMs <= 0) {
+            m_fsTransitioning = false; // give up quietly and unlock
+        } else {
+            QTimer::singleShot(50, this, [this, key, value, isBool, timeoutMs, then] {
+                whenHyprState(key, value, isBool, timeoutMs - 50, then);
+            });
+        }
+    });
+    p->start("hyprctl", { "-j", "activewindow" });
+}
+
 void MpvCore::windowFullscreen(bool on)
 {
-    if (m_renderWindow)
-        m_renderWindow->setVisibility(on ? QWindow::FullScreen : QWindow::Windowed);
+    if (!m_renderWindow)
+        return;
+    if (m_fsTransitioning)
+        return;
+    m_fsTransitioning = true;
+    if (on) {
+        // omaplayer is a *pinned* ("always on top") floating window by window
+        // rule. Hyprland refuses to fullscreen a pinned window, and our float
+        // ignores the plain QWindow::FullScreen request, so we drive both the
+        // pin and the fullscreen through the Hyprland IPC (new DSL). Each step
+        // waits for the compositor to actually apply the previous one, since
+        // the dispatches can otherwise race and undo each other.
+        dispatchHypr({ "dispatch", "hl.dsp.window.pin(false)" });
+        whenHyprState(QStringLiteral("pinned"), "false", true, 1000, [this] {
+            dispatchHypr({ "dispatch", "hl.dsp.window.fullscreen()" });
+        });
+        whenHyprState(QStringLiteral("fullscreen"), "2", false, 1500, [this] {
+            m_fsTransitioning = false;
+        });
+    } else {
+        dispatchHypr({ "dispatch", "hl.dsp.window.fullscreen()" });
+        whenHyprState(QStringLiteral("fullscreen"), "0", false, 1000, [this] {
+            dispatchHypr({ "dispatch", "hl.dsp.window.pin(true)" });
+            m_fsTransitioning = false;
+        });
+    }
 }
 
 void MpvCore::toggleMinimize()

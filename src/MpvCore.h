@@ -4,6 +4,7 @@
 #include <QString>
 #include <QPointer>
 #include <QtQmlIntegration>
+#include <functional>
 
 class QOpenGLContext;
 class QQuickItem;
@@ -165,4 +166,7 @@ public:
 
 private:
     static MpvCore *s_instance;
+    void whenHyprState(const QString &key, const char *value, bool isBool,
+                       int timeoutMs, const std::function<void()> &then);
+    bool m_fsTransitioning = false;
 };
