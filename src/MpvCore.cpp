@@ -3,9 +3,10 @@
 #include <QOpenGLContext>
 #include <QQuickWindow>
 #include <QQuickItem>
+#include <QFile>
+#include <QTextStream>
 
 #include <cstring>
-
 namespace {
 
 // Qt Quick keeps a QOpenGLContext current on the render thread; the address
@@ -76,6 +77,14 @@ MpvCore::MpvCore(QObject *parent)
     mpv_observe_property(m_handle, 0, "mute", MPV_FORMAT_FLAG);
     mpv_observe_property(m_handle, 0, "media-title", MPV_FORMAT_STRING);
     mpv_observe_property(m_handle, 0, "path", MPV_FORMAT_STRING);
+    mpv_observe_property(m_handle, 0, "speed", MPV_FORMAT_DOUBLE);
+    mpv_observe_property(m_handle, 0, "sub-visibility", MPV_FORMAT_FLAG);
+    mpv_observe_property(m_handle, 0, "brightness", MPV_FORMAT_DOUBLE);
+    mpv_observe_property(m_handle, 0, "contrast", MPV_FORMAT_DOUBLE);
+    mpv_observe_property(m_handle, 0, "saturation", MPV_FORMAT_DOUBLE);
+    mpv_observe_property(m_handle, 0, "gamma", MPV_FORMAT_DOUBLE);
+    mpv_observe_property(m_handle, 0, "sub-scale", MPV_FORMAT_DOUBLE);
+    mpv_observe_property(m_handle, 0, "audio-delay", MPV_FORMAT_DOUBLE);
 
     mpv_set_wakeup_callback(m_handle, &MpvCore::wakeupCallback, this);
     mpv_request_log_messages(m_handle, "warn");
@@ -148,11 +157,17 @@ mpv_render_context *MpvCore::renderContext()
     // context, otherwise the video stream silently never starts.
     if (m_pendingOpen) {
         m_pendingOpen = false;
-        const QString location = m_pendingLocation;
-        m_pendingLocation.clear();
-        const QByteArray bytes = location.toUtf8();
-        const char *cmd[] = { "loadfile", bytes.constData(), nullptr };
-        mpv_command(m_handle, cmd);
+        if (!m_pendingFiles.isEmpty()) {
+            openList(m_pendingFiles);
+            m_pendingFiles.clear();
+        } else {
+            const QString location = m_pendingLocation;
+            m_pendingLocation.clear();
+            const QByteArray bytes = location.toUtf8();
+            const char *cmd[] = { "loadfile", bytes.constData(), nullptr };
+            mpv_command(m_handle, cmd);
+            mpv_set_property_string(m_handle, "pause", "no");
+        }
     }
     return m_renderContext;
 }
@@ -286,6 +301,46 @@ void MpvCore::handleWakeup()
                         Q_EMIT filePathChanged(m_filePath);
                     }
                 }
+            } else if (prop->format == MPV_FORMAT_DOUBLE && std::strcmp(name, "speed") == 0) {
+                if (value != m_speed) {
+                    m_speed = value;
+                    Q_EMIT speedChanged(m_speed);
+                }
+            } else if (prop->format == MPV_FORMAT_FLAG && std::strcmp(name, "sub-visibility") == 0) {
+                if (flag != m_subVisible) {
+                    m_subVisible = flag;
+                    Q_EMIT subtitlesVisibleChanged(m_subVisible);
+                }
+            } else if (prop->format == MPV_FORMAT_DOUBLE && std::strcmp(name, "brightness") == 0) {
+                if (value != m_brightness) {
+                    m_brightness = value;
+                    Q_EMIT brightnessChanged(m_brightness);
+                }
+            } else if (prop->format == MPV_FORMAT_DOUBLE && std::strcmp(name, "contrast") == 0) {
+                if (value != m_contrast) {
+                    m_contrast = value;
+                    Q_EMIT contrastChanged(m_contrast);
+                }
+            } else if (prop->format == MPV_FORMAT_DOUBLE && std::strcmp(name, "saturation") == 0) {
+                if (value != m_saturation) {
+                    m_saturation = value;
+                    Q_EMIT saturationChanged(m_saturation);
+                }
+            } else if (prop->format == MPV_FORMAT_DOUBLE && std::strcmp(name, "gamma") == 0) {
+                if (value != m_gamma) {
+                    m_gamma = value;
+                    Q_EMIT gammaChanged(m_gamma);
+                }
+            } else if (prop->format == MPV_FORMAT_DOUBLE && std::strcmp(name, "sub-scale") == 0) {
+                if (value != m_subScale) {
+                    m_subScale = value;
+                    Q_EMIT subScaleChanged(m_subScale);
+                }
+            } else if (prop->format == MPV_FORMAT_DOUBLE && std::strcmp(name, "audio-delay") == 0) {
+                if (value != m_audioDelay) {
+                    m_audioDelay = value;
+                    Q_EMIT audioDelayChanged(m_audioDelay);
+                }
             }
             break;
         }
@@ -293,6 +348,22 @@ void MpvCore::handleWakeup()
             auto *log = static_cast<mpv_event_log_message *>(event->data);
             if (log && log->prefix && log->text)
                 qInfo("[mpv:%s] %s", log->prefix, log->text);
+            break;
+        }
+        case MPV_EVENT_END_FILE: {
+            // With keep-open=yes, mpv pauses at end-of-file instead of
+            // advancing, so drive the playlist forward ourselves: jump to the
+            // next entry whenever a file ends normally and one exists.
+            auto *ef = static_cast<mpv_event_end_file *>(event->data);
+            if (ef->reason == MPV_END_FILE_REASON_EOF) {
+                int64_t count = 0;
+                int64_t pos = 0;
+                if (mpv_get_property(m_handle, "playlist-count", MPV_FORMAT_INT64, &count) == 0
+                    && mpv_get_property(m_handle, "playlist-pos", MPV_FORMAT_INT64, &pos) == 0
+                    && count > 0 && pos >= 0 && pos + 1 < count) {
+                    mpv_command_string(m_handle, "playlist-next");
+                }
+            }
             break;
         }
         default:
@@ -315,6 +386,7 @@ void MpvCore::open(const QString &location)
     const QByteArray bytes = location.toUtf8();
     const char *cmd[] = { "loadfile", bytes.constData(), nullptr };
     mpv_command(m_handle, cmd);
+    mpv_set_property_string(m_handle, "pause", "no");
 }
 
 void MpvCore::play()
@@ -393,6 +465,18 @@ void MpvCore::toggleFullscreen()
     mpv_command_string(m_handle, "cycle fullscreen");
 }
 
+void MpvCore::windowFullscreen(bool on)
+{
+    if (m_renderWindow)
+        m_renderWindow->setVisibility(on ? QWindow::FullScreen : QWindow::Windowed);
+}
+
+void MpvCore::toggleMinimize()
+{
+    if (m_renderWindow)
+        m_renderWindow->setVisibility(QWindow::Minimized);
+}
+
 bool MpvCore::isFullscreen()
 {
     return false; // handled by the window, kept here for symmetry
@@ -403,4 +487,195 @@ void MpvCore::takeScreenshot()
     if (!m_handle)
         return;
     mpv_command_string(m_handle, "screenshot-to-file ~/Pictures/omaplayer-${file-name}");
+}
+
+void MpvCore::openList(const QStringList &files)
+{
+    if (!m_handle || files.isEmpty())
+        return;
+    if (!m_renderContext) {
+        // No render context yet (no first paint); remember all files so the
+        // renderContext() path can start the full list once painting begins.
+        m_pendingOpen = true;
+        m_pendingFiles = files;
+        return;
+    }
+    for (int i = 0; i < files.size(); ++i) {
+        const QByteArray fn = files.at(i).toUtf8();
+        const char *cmd[] = { "loadfile", fn.constData(), i == 0 ? nullptr : "append-play", nullptr };
+        mpv_command(m_handle, cmd);
+    }
+    mpv_set_property_string(m_handle, "pause", "no");
+}
+
+QVariantList MpvCore::playlistItems()
+{
+    QVariantList out;
+    if (!m_handle)
+        return out;
+
+    int64_t count = 0;
+    if (mpv_get_property(m_handle, "playlist-count", MPV_FORMAT_INT64, &count) < 0 || count <= 0)
+        return out;
+
+    int64_t pos = 0;
+    mpv_get_property(m_handle, "playlist-pos", MPV_FORMAT_INT64, &pos);
+
+    for (int64_t i = 0; i < count; ++i) {
+        const QByteArray base = "playlist/" + QByteArray::number(i) + "/";
+        QVariantMap item;
+
+        char *title = nullptr;
+        if (mpv_get_property(m_handle, base + "title", MPV_FORMAT_STRING, &title) == 0 && title) {
+            item["title"] = QString::fromUtf8(title);
+            mpv_free(title);
+        }
+
+        char *filename = nullptr;
+        if (mpv_get_property(m_handle, base + "filename", MPV_FORMAT_STRING, &filename) == 0 && filename) {
+            QString path = QString::fromUtf8(filename);
+            mpv_free(filename);
+            item["path"] = path;
+            if (!item.contains("title")) {
+                const int slash = path.lastIndexOf('/');
+                item["title"] = slash >= 0 ? path.mid(slash + 1) : path;
+            }
+        }
+
+        if (item.contains("path")) {
+            item["current"] = (i == pos);
+            out.append(item);
+        }
+    }
+    return out;
+}
+
+void MpvCore::toggleSubtitles()
+{
+    if (!m_handle)
+        return;
+    mpv_set_property_string(m_handle, "sub-visibility", m_subVisible ? "no" : "yes");
+}
+
+namespace {
+void setDoubleProperty(mpv_handle *handle, const char *name, double value)
+{
+    if (!handle)
+        return;
+    const QByteArray text = QByteArray::number(value);
+    mpv_set_property_string(handle, name, text.constData());
+}
+} // namespace
+
+void MpvCore::setSpeed(double speed)
+{
+    if (m_speed != speed) {
+        m_speed = speed;
+        Q_EMIT speedChanged(m_speed);
+    }
+    setDoubleProperty(m_handle, "speed", m_speed);
+}
+
+void MpvCore::setBrightness(double value) { setDoubleProperty(m_handle, "brightness", value); }
+void MpvCore::setContrast(double value) { setDoubleProperty(m_handle, "contrast", value); }
+void MpvCore::setSaturation(double value) { setDoubleProperty(m_handle, "saturation", value); }
+void MpvCore::setGamma(double value) { setDoubleProperty(m_handle, "gamma", value); }
+void MpvCore::setSubScale(double value) { setDoubleProperty(m_handle, "sub-scale", value); }
+void MpvCore::setAudioDelay(double value) { setDoubleProperty(m_handle, "audio-delay", value); }
+
+bool MpvCore::hasNext()
+{
+    if (!m_handle)
+        return false;
+    int64_t count = 0;
+    int64_t pos = 0;
+    if (mpv_get_property(m_handle, "playlist-count", MPV_FORMAT_INT64, &count) < 0)
+        return false;
+    if (mpv_get_property(m_handle, "playlist-pos", MPV_FORMAT_INT64, &pos) < 0)
+        return false;
+    return pos >= 0 && pos + 1 < count;
+}
+
+bool MpvCore::hasPrevious()
+{
+    if (!m_handle)
+        return false;
+    int64_t pos = 0;
+    if (mpv_get_property(m_handle, "playlist-pos", MPV_FORMAT_INT64, &pos) < 0)
+        return false;
+    return pos > 0;
+}
+
+void MpvCore::playlistNext()
+{
+    if (m_handle)
+        mpv_command_string(m_handle, "playlist-next");
+}
+
+void MpvCore::playlistPrevious()
+{
+    if (m_handle)
+        mpv_command_string(m_handle, "playlist-prev");
+}
+
+void MpvCore::setLoopStatus(const QString &status)
+{
+    if (!m_handle)
+        return;
+    const QString s = status == QLatin1String("Track") ? QStringLiteral("inf")
+                    : status == QLatin1String("Playlist") ? QStringLiteral("force")
+                    : QStringLiteral("no");
+    const QByteArray bytes = s.toUtf8();
+    mpv_set_property_string(m_handle, "loop-playlist", bytes.constData());
+}
+
+QString MpvCore::loopStatus()
+{
+    return QStringLiteral("None");
+}
+
+void MpvCore::removePlaylistItem(int index)
+{
+    if (!m_handle)
+        return;
+    const QByteArray idx = QByteArray::number(index);
+    const char *cmd[] = { "playlist-remove", idx.constData(), nullptr };
+    mpv_command(m_handle, cmd);
+}
+
+void MpvCore::movePlaylistItem(int from, int to)
+{
+    if (!m_handle || from == to)
+        return;
+    // mpv's playlist-move takes <index1> <index2>: move the entry at index1
+    // to just before index2 (negative numbers count from the end).
+    const QByteArray f = QByteArray::number(from);
+    const QByteArray t = QByteArray::number(to);
+    const char *cmd[] = { "playlist-move", f.constData(), t.constData(), nullptr };
+    mpv_command(m_handle, cmd);
+}
+
+QString MpvCore::savePlaylist(const QString &filePath)
+{
+    if (!m_handle || filePath.isEmpty())
+        return QString();
+    const QVariantList items = playlistItems();
+    if (items.isEmpty())
+        return QString();
+
+    QFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text))
+        return QString();
+    QTextStream out(&file);
+    out << "#EXTM3U\n";
+    for (const QVariant &v : items) {
+        const QVariantMap m = v.toMap();
+        const QString title = m.value("title").toString();
+        QString path = m.value("path").toString();
+        if (!title.isEmpty())
+            out << "#EXTINF:-1," << title << "\n";
+        // Store local files as absolute paths; remote URLs verbatim.
+        out << path << "\n";
+    }
+    return filePath;
 }

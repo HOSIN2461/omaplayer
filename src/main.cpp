@@ -1,7 +1,9 @@
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <QQmlError>
 #include <QQuickWindow>
+#include <QDBusConnection>
 #include <QLocale>
 #include <QLibraryInfo>
 #include <QTranslator>
@@ -9,9 +11,14 @@
 #include <clocale>
 
 #include "MpvCore.h"
+#include "MprisPlayer.h"
+
+using namespace Qt::Literals::StringLiterals;
 
 int main(int argc, char *argv[])
 {
+    fprintf(stderr, "BOOT-START\n");
+    fflush(stderr);
     // NVIDIA driver 580.178.04 segfaults (SIGSEGV in libnvidia-eglcore during
     // QRhi::endFrame) when Qt Quick presents over the setup the in-code
     // setGraphicsApi() below selects; the QSG_RHI_BACKEND environment variable
@@ -20,6 +27,8 @@ int main(int argc, char *argv[])
     qputenv("QSG_RHI_BACKEND", "opengl");
 
     QGuiApplication app(argc, argv);
+    fprintf(stderr, "BOOT app-ctor done\n");
+    fflush(stderr);
     // PiP toggles the window set (one hides while the other maps), which must
     // not end the session just because no window happens to be visible in that
     // instant.
@@ -76,9 +85,38 @@ int main(int argc, char *argv[])
     QQmlApplicationEngine engine;
     QObject::connect(
         &engine, &QQmlApplicationEngine::objectCreationFailed,
-        &app, [] { QCoreApplication::exit(-1); },
+        &app, [] { qWarning() << "MAIN: objectCreationFailed"; QCoreApplication::exit(-1); },
         Qt::QueuedConnection);
+    QObject::connect(&engine, &QQmlEngine::warnings,
+                     [](const QList<QQmlError> &errs) {
+                         for (const QQmlError &e : errs)
+                             qWarning().noquote() << e.toString();
+                     });
     engine.loadFromModule(QStringLiteral("Omaplayer"), QStringLiteral("Main"));
+    fprintf(stderr, "BOOT after loadFromModule, rootObjects=%d\n", int(engine.rootObjects().size()));
+    fflush(stderr);
+
+    // --- MPRIS (org.mpris.MediaPlayer2) over session D-Bus — media keys,
+    // mixer strips and the desktop shell's media widget drive the player.
+    MpvCore::instance(); // ensure the singleton exists before adaptors attach
+    {
+        QDBusConnection bus = QDBusConnection::sessionBus();
+        if (bus.isConnected()
+            && bus.registerService(QStringLiteral("org.mpris.MediaPlayer2.omaplayer"))) {
+            // The QDBusAbstractAdaptor pattern requires one "host" object that
+            // owns the adaptors; registering the host exports every adaptor on
+            // the same object path.
+            static QObject mprisHost;
+            static MprisRoot rootAdaptor(MpvCore::instance(), &mprisHost);
+            static MprisPlayer playerAdaptor(MpvCore::instance(), &mprisHost);
+            bus.registerObject(QStringLiteral("/org/mpris/MediaPlayer2"),
+                               &mprisHost,
+                               QDBusConnection::ExportAdaptors);
+        } else {
+            qInfo("MPRIS: session bus unavailable or name already taken — "
+                  "disabled (another player instance may be running)");
+        }
+    }
 
     // IINA-style usage: `omaplayer <file-or-url>...` (options start with `--`
     // and must be skipped before picking the media path).

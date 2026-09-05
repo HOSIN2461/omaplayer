@@ -30,6 +30,14 @@ class MpvCore : public QObject
     Q_PROPERTY(bool muted READ muted NOTIFY mutedChanged)
     Q_PROPERTY(QString mediaTitle READ mediaTitle NOTIFY mediaTitleChanged)
     Q_PROPERTY(QString filePath READ filePath NOTIFY filePathChanged)
+    Q_PROPERTY(double speed READ speed WRITE setSpeed NOTIFY speedChanged)
+    Q_PROPERTY(bool subtitlesVisible READ subtitlesVisible NOTIFY subtitlesVisibleChanged)
+    Q_PROPERTY(double brightness READ brightness WRITE setBrightness NOTIFY brightnessChanged)
+    Q_PROPERTY(double contrast READ contrast WRITE setContrast NOTIFY contrastChanged)
+    Q_PROPERTY(double saturation READ saturation WRITE setSaturation NOTIFY saturationChanged)
+    Q_PROPERTY(double gamma READ gamma WRITE setGamma NOTIFY gammaChanged)
+    Q_PROPERTY(double subScale READ subScale WRITE setSubScale NOTIFY subScaleChanged)
+    Q_PROPERTY(double audioDelay READ audioDelay WRITE setAudioDelay NOTIFY audioDelayChanged)
 
 public:
     // The QML side instantiates the type (Main.qml holds one as `mpv`), and the
@@ -48,8 +56,27 @@ public:
     bool muted() const { return m_muted; }
     QString mediaTitle() const { return m_mediaTitle; }
     QString filePath() const { return m_filePath; }
+    double speed() const { return m_speed; }
+    bool subtitlesVisible() const { return m_subVisible; }
+    double brightness() const { return m_brightness; }
+    double contrast() const { return m_contrast; }
+    double saturation() const { return m_saturation; }
+    double gamma() const { return m_gamma; }
+    double subScale() const { return m_subScale; }
+    double audioDelay() const { return m_audioDelay; }
 
     Q_INVOKABLE void open(const QString &location);
+    Q_INVOKABLE void openList(const QStringList &files);
+    Q_INVOKABLE QVariantList playlistItems();
+    Q_INVOKABLE bool hasNext();
+    Q_INVOKABLE bool hasPrevious();
+    Q_INVOKABLE void playlistNext();
+    Q_INVOKABLE void playlistPrevious();
+    Q_INVOKABLE void setLoopStatus(const QString &status);
+    Q_INVOKABLE QString loopStatus();
+    Q_INVOKABLE void removePlaylistItem(int index);
+    Q_INVOKABLE void movePlaylistItem(int from, int to);
+    Q_INVOKABLE QString savePlaylist(const QString &filePath);
     Q_INVOKABLE void play();
     Q_INVOKABLE void pause();
     Q_INVOKABLE void stop();
@@ -61,7 +88,17 @@ public:
     Q_INVOKABLE void frameStep();
     Q_INVOKABLE void toggleFullscreen();
     Q_INVOKABLE bool isFullscreen();
+    Q_INVOKABLE void toggleMinimize();
+    Q_INVOKABLE void windowFullscreen(bool on);
     Q_INVOKABLE void takeScreenshot();
+    Q_INVOKABLE void toggleSubtitles();
+    void setSpeed(double speed);
+    void setBrightness(double value);
+    void setContrast(double value);
+    void setSaturation(double value);
+    void setGamma(double value);
+    void setSubScale(double value);
+    void setAudioDelay(double value);
 
     // Renderer-facing API (called on the Qt Quick render thread).
     mpv_render_context *renderContext();
@@ -80,6 +117,14 @@ signals:
     void mutedChanged(bool muted);
     void mediaTitleChanged(const QString &mediaTitle);
     void filePathChanged(const QString &filePath);
+    void speedChanged(double speed);
+    void subtitlesVisibleChanged(bool visible);
+    void brightnessChanged(double value);
+    void contrastChanged(double value);
+    void saturationChanged(double value);
+    void gammaChanged(double value);
+    void subScaleChanged(double value);
+    void audioDelayChanged(double value);
 
 public:
     static void wakeupCallback(void *context);
@@ -95,6 +140,7 @@ public:
     QPointer<QQuickItem> m_renderItem;
     bool m_pendingOpen = false;
     QString m_pendingLocation;
+    QStringList m_pendingFiles;
     bool m_contextRebootPending = false; // deferred loadfile after ctx recreation
     QString m_contextRebootLocation;
     double m_contextRebootPosition = 0.0;
@@ -106,6 +152,14 @@ public:
     bool m_muted = false;
     QString m_mediaTitle;
     QString m_filePath;
+    double m_speed = 1.0;
+    bool m_subVisible = true;
+    double m_brightness = 0.0;
+    double m_contrast = 0.0;
+    double m_saturation = 0.0;
+    double m_gamma = 0.0;
+    double m_subScale = 1.0;
+    double m_audioDelay = 0.0;
 
     friend class MpvVideoItem;
 

@@ -1,63 +1,29 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Dialogs
+import QtQuick.Layouts
 import Omaplayer
 
 ApplicationWindow {
     id: root
 
     visible: true
-    width: 1024
-    height: 600
+    width: 640
+    height: 400
     minimumWidth: 320
     minimumHeight: 200
     color: "black"
     property MpvCore mpv: MpvCore {}
     property bool autoPip: Qt.application.arguments.indexOf("--pip") >= 0
+    // The player is a compact floating window by design (float + pin via the
+    // Hyprland rule); the much bigger "windowed" mode below would feel like a
+    // second PiP, so there is no dedicated PiP toggle any more.
     property int pipW: 360
     property int pipH: 203
 
-    // Mouse grip for resizing the frameless PiP frame. The whole edge set is
-    // passed to startSystemResize() so the compositor moves the opposite
-    // edges; when it refuses, width/height are tracked by hand.
-    component PipResizeGrip: MouseArea {
-        id: grip
-        property int edges: Qt.RightEdge
-        property int minW: 160
-        property int minH: 90
-        property bool manual: false
-        property int pressX: 0
-        property int pressY: 0
-        property int pressW: 0
-        property int pressH: 0
-
-        hoverEnabled: true
-        cursorShape: (edges & Qt.RightEdge) && (edges & Qt.BottomEdge) ? Qt.SizeFDiagCursor
-                    : (edges & Qt.LeftEdge) && (edges & Qt.BottomEdge) ? Qt.SizeBDiagCursor
-                    : (edges & Qt.RightEdge) || (edges & Qt.LeftEdge) ? Qt.SizeHorCursor
-                    : Qt.SizeVerCursor
-
-        onPressed: mouse => {
-            pressX = mouse.x
-            pressY = mouse.y
-            pressW = pipWindow.width
-            pressH = pipWindow.height
-            manual = !pipWindow.startSystemResize(edges)
-        }
-        onPositionChanged: mouse => {
-            if (!manual)
-                return
-            if (edges & Qt.RightEdge)
-                pipWindow.width = Math.max(minW, pressW + (mouse.x - pressX))
-            if (edges & Qt.BottomEdge)
-                pipWindow.height = Math.max(minH, pressH + (mouse.y - pressY))
-        }
-        onReleased: manual = false
-    }
-
     Component.onCompleted: {
-        if (autoPip)
-            Qt.callLater(root.togglePip)
+        // --pip is accepted for backwards compatibility; the player is now
+        // always a compact floating window (float + pin via Hyprland rule).
     }
 
     title: mpv.mediaTitle.length > 0 ? mpv.mediaTitle : qsTr("Omaplayer")
@@ -82,12 +48,12 @@ ApplicationWindow {
         anchors.bottom: parent.bottom
     }
 
-    // Auto-hide: fade the bar out after idle, keep it while the pointer or a
-    // seek drag is on it.
+    // Auto-hide: fade the bar away after idle, keep it while the pointer or a
+    // seek drag is on it. It stays up while paused so controls remain handy.
     Timer {
         id: barTimer
-        interval: 2500
-        running: mpv.playing
+        interval: 3200
+        running: mpv.playing && bar.exposed
         repeat: true
         onTriggered: {
             if (!bar.anywhereHovered && !bar.dragActive)
@@ -111,7 +77,7 @@ ApplicationWindow {
         onClicked: mouse => {
             bar.show()
             if (mouse.button === Qt.RightButton)
-                contextMenu.popup()
+                contextMenu.openAt(mouse.x, mouse.y)
             else
                 mpv.togglePause()
         }
@@ -119,112 +85,895 @@ ApplicationWindow {
             if (mouse.button === Qt.LeftButton)
                 root.toggleFullscreen()
         }
+        // Celluloid-style wheel: vertical scroll = volume, horizontal (or
+        // Shift+scroll) = seek. A pip floating window is small, so volume is
+        // the most-used gesture; the seek timeline stays precise for seeking.
         onWheel: wheel => {
-            if (wheel.modifiers & Qt.ControlModifier)
-                mpv.setVolume(Math.max(0, Math.min(150, mpv.volume + wheel.angleDelta.y / 8)))
+            const horiz = wheel.angleDelta.x !== 0 || (wheel.modifiers & Qt.ShiftModifier)
+            const delta = horiz ? wheel.angleDelta.x !== 0 ? wheel.angleDelta.x : wheel.angleDelta.y
+                                : wheel.angleDelta.y
+            if (horiz)
+                mpv.seekRelative(delta > 0 ? 10 : -10)
             else
-                mpv.seekRelative(wheel.angleDelta.y > 0 ? 5 : -5)
+                mpv.setVolume(Math.max(0, Math.min(150, mpv.volume + delta / 8)))
         }
 
         // Hover over the bottom strip reveals the bar; anything else auto-hides.
         onPositionChanged: mouse => {
-            if (mouse.y > bar.y)
+            if (mouse.y > root.height - 84)
                 bar.show()
         }
     }
 
-    Menu {
-        id: contextMenu
+    // --- context menu (custom popup — the Qt Controls Menu turned out to
+    // render an empty box with delegates, so this is 100% ours) ----------------
+    component MenuRow: Rectangle {
+        id: row
+        property string rowText: ""
+        property string glyph: ""
+        property var onActivate: null
 
-        MenuItem {
-            text: qsTr("Open media…")
-            onTriggered: openDialog.open()
+        width: contextMenu.width
+        height: 32
+        radius: 7
+        color: mouse.containsMouse ? Colors.hover : "transparent"
+        Behavior on color { ColorAnimation { duration: 90 } }
+
+        MouseArea {
+            id: mouse
+            anchors.fill: parent
+            hoverEnabled: true
+            acceptedButtons: Qt.LeftButton
+            onClicked: {
+                contextMenu.close()
+                if (row.onActivate)
+                    row.onActivate()
+            }
         }
-        MenuItem {
-            text: qsTr("Open URL…")
-            onTriggered: urlDialog.open()
+
+        RowLayout {
+            anchors.fill: parent
+            spacing: 10
+            anchors.leftMargin: 12
+            anchors.rightMargin: 12
+
+            Text {
+                text: row.glyph
+                font.family: "Font Awesome 7 Free Solid"
+                font.pixelSize: 14
+                color: mouse.containsMouse ? Colors.accent : Colors.textDim
+                Behavior on color { ColorAnimation { duration: 90 } }
+            }
+
+            Text {
+                text: row.rowText
+                font.pixelSize: 13
+                color: mouse.containsMouse ? Colors.overlayText : Colors.textDim
+                verticalAlignment: Text.AlignVCenter
+                Behavior on color { ColorAnimation { duration: 90 } }
+            }
+
+            Item { Layout.fillWidth: true }
         }
-        MenuItem {
-            text: qsTr("Screenshot")
-            onTriggered: mpv.takeScreenshot()
+    }
+
+    // Labelled value slider used by the settings panel (brightness, contrast,
+    // saturation, gamma, subtitle size, audio delay).
+    component ValueSlider: RowLayout {
+        id: vs
+        property string vsLabel: ""
+        property int vsMin: -100
+        property int vsMax: 100
+        property int vsStep: 1
+        property double vsValue: 0
+        property bool vsInteger: true
+        property var onChanged: null
+
+        Text {
+            text: vs.vsLabel
+            color: Colors.overlayText
+            font.pixelSize: 12
+            Layout.preferredWidth: 84
         }
-        MenuItem {
-            text: pipWindow.visible ? qsTr("Exit PiP") : qsTr("Picture-in-Picture")
-            onTriggered: root.togglePip()
+        Slider {
+            id: vsSlider
+            Layout.fillWidth: true
+            from: vs.vsMin
+            to: vs.vsMax
+            stepSize: vs.vsStep
+            value: vs.vsValue
+            onMoved: if (vs.onChanged) vs.onChanged(value)
+
+            background: Item {
+                implicitHeight: 16
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    height: 4
+                    radius: height / 2
+                    color: Colors.track
+                }
+                Rectangle {
+                    width: parent.width * vsSlider.visualPosition
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    height: 4
+                    radius: height / 2
+                    color: Colors.accent
+                }
+            }
+            handle: Rectangle {
+                x: vsSlider.leftPadding + vsSlider.visualPosition * (vsSlider.availableWidth - width)
+                y: vsSlider.topPadding + (vsSlider.availableHeight - height) / 2
+                width: 13
+                height: 13
+                radius: width / 2
+                color: vsSlider.hovered || vsSlider.dragging ? "#ffffff" : Colors.hover
+                border.color: Colors.accent
+                border.width: 2
+                Behavior on color { ColorAnimation { duration: 110 } }
+            }
         }
-        MenuSeparator {}
-        MenuItem {
-            text: mpv.playing ? qsTr("Pause") : qsTr("Play")
-            onTriggered: mpv.togglePause()
+        Text {
+            text: vsInteger ? Math.round(vsSlider.value).toString()
+                            : vsSlider.value.toFixed(1)
+            color: Colors.textDim
+            font.pixelSize: 11
+            Layout.preferredWidth: 40
+            horizontalAlignment: Text.AlignRight
         }
-        MenuItem {
-            text: root.visibility === Window.FullScreen ? qsTr("Exit fullscreen") : qsTr("Fullscreen")
-            onTriggered: root.toggleFullscreen()
+    }
+
+    // Draggable edges/corners for the floating window. Prefers the compositor
+    // interaction (startSystemResize) and falls back to manual resizing.
+    component ResizeGrip: MouseArea {
+        id: grip
+        property int edges: Qt.RightEdge
+        property int minW: 380
+        property int minH: 240
+        property bool manual: false
+        property int pressX
+        property int pressY
+        property int pressW
+        property int pressH
+
+        cursorShape: (edges & Qt.RightEdge)
+                    ? ((edges & Qt.BottomEdge) ? Qt.SizeFDiagCursor : Qt.SizeHorCursor)
+                    : ((edges & Qt.LeftEdge)
+                        ? ((edges & Qt.BottomEdge) ? Qt.SizeBDiagCursor : Qt.SizeHorCursor)
+                        : Qt.SizeVerCursor)
+
+        onPressed: {
+            pressX = mouse.x
+            pressY = mouse.y
+            pressW = root.width
+            pressH = root.height
+            manual = !root.startSystemResize(edges)
+        }
+        onPositionChanged: {
+            if (!manual) return
+            var dx = mouse.x - pressX
+            var dy = mouse.y - pressY
+            if (edges & Qt.RightEdge)
+                root.width = Math.max(minW, pressW + dx)
+            if (edges & Qt.BottomEdge)
+                root.height = Math.max(minH, pressH + dy)
+            if (edges & Qt.LeftEdge)
+                root.width = Math.max(minW, pressW - dx)
+        }
+        onReleased: manual = false
+    }
+
+    // Resize handles on all edges of the floating window.
+    ResizeGrip { z: 100; edges: Qt.RightEdge;   width: 8; anchors.top: parent.top; anchors.bottom: parent.bottom; anchors.right: parent.right }
+    ResizeGrip { z: 100; edges: Qt.BottomEdge;  height: 8; anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom }
+    ResizeGrip { z: 100; edges: Qt.RightEdge | Qt.BottomEdge; width: 22; height: 22; anchors.right: parent.right; anchors.bottom: parent.bottom }
+    ResizeGrip { z: 100; edges: Qt.LeftEdge | Qt.BottomEdge; width: 22; height: 22; anchors.left: parent.left; anchors.bottom: parent.bottom }
+    ResizeGrip { z: 100; edges: Qt.LeftEdge;  width: 8; anchors.top: parent.top; anchors.bottom: parent.bottom; anchors.left: parent.left }
+    ResizeGrip { z: 100; edges: Qt.TopEdge;   height: 8; anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top }
+    ResizeGrip { z: 100; edges: Qt.TopEdge | Qt.LeftEdge; width: 22; height: 22; anchors.left: parent.left; anchors.top: parent.top }
+    ResizeGrip { z: 100; edges: Qt.TopEdge | Qt.RightEdge; width: 22; height: 22; anchors.right: parent.right; anchors.top: parent.top }
+
+    Popup {
+        id: contextMenu
+        width: 210
+        padding: 6
+        z: 50
+
+        // Screen-space feel: body sits at the cursor, clamped inside the window.
+        function openAt(x, y) {
+            contextMenu.x = Math.min(Math.max(6, x), root.width - contextMenu.width - 6)
+            contextMenu.y = Math.min(Math.max(6, y), root.height - contextMenu.height - 6)
+            contextMenu.open()
+        }
+
+        background: Rectangle {
+            radius: 12
+            color: Colors.overlay
+            border.color: Colors.border
+            border.width: 1
+        }
+
+        contentItem: Column {
+            spacing: 3
+
+            MenuRow { rowText: qsTr("Open media…");   glyph: "\uF07C"; onActivate: () => openDialog.open() }
+            MenuRow { rowText: qsTr("Open URL…");     glyph: "\uF0AC"; onActivate: () => urlDialog.open() }
+            MenuRow { rowText: qsTr("Screenshot");    glyph: "\uF030"; onActivate: () => mpv.takeScreenshot() }
+
+            Rectangle {
+                height: 1
+                width: parent.width
+                color: Colors.border
+            }
+
+            MenuRow {
+                rowText: mpv.playing ? qsTr("Pause") : qsTr("Play")
+                glyph: mpv.playing ? "\uF04C" : "\uF04B"
+                onActivate: () => mpv.togglePause()
+            }
+            MenuRow {
+                rowText: root.isFullScreen ? qsTr("Exit fullscreen") : qsTr("Fullscreen")
+                glyph: "\uF065"
+                onActivate: () => root.toggleFullscreen()
+            }
+            MenuRow {
+                rowText: qsTr("Minimize to tray (peek)")
+                glyph: "\uF2D1"
+                onActivate: () => mpv.toggleMinimize()
+            }
         }
     }
 
     // --- fullscreen / window state --------------------------------------------
+    property bool isFullScreen: false
+
     function toggleFullscreen() {
-        root.visibility = root.visibility === Window.FullScreen
-                              ? Window.Windowed
-                              : Window.FullScreen
+        isFullScreen = !isFullScreen
+        mpv.windowFullscreen(isFullScreen)
     }
 
-    // --- picture-in-picture --------------------------------------------------
-    // libmpv allows a single render context, so PiP re-parents the very same
-    // video item into a small always-on-top window instead of rendering twice.
-    function togglePip() {
-        if (pipWindow.visible) {
-            exitPip()
-        } else {
-            video.parent = pipWindow.contentItem
-            pipWindow.width = root.pipW
-            pipWindow.height = root.pipH
-            pipWindow.show()
-            pipWindow.requestActivate()
-            root.hide()
+    // Places a popup next to a bar button (menu dropped below, panels lifted
+    // above the bar so they float over the video).
+    function positionMenu(menu, px, py, above) {
+        menu.x = Math.min(Math.max(6, px - menu.width), root.width - menu.width - 6)
+        if (above)
+            menu.y = Math.min(Math.max(6, py - menu.height + 4), root.height - menu.height - 6)
+        else
+            menu.y = Math.min(Math.max(6, py), root.height - menu.height - 6)
+        menu.open()
+    }
+
+    // The bar's settings gear → video colours / subtitles / audio panel.
+    function openSettingsAt(btn) {
+        const pt = btn.mapToItem(root, btn.width, btn.height + 6)
+        positionMenu(settingsMenu, pt.x, pt.y, true)
+    }
+
+    // The bar's playlist button (three lines) → refresh + lift the list panel.
+    function openPlaylistAt(btn) {
+        const items = mpv.playlistItems()
+        playlistModel.clear()
+        for (var i = 0; i < items.length; i++) {
+            playlistModel.append({ "title": items[i].title,
+                                   "path": items[i].path,
+                                   "current": items[i].current })
         }
-    }
-
-    function exitPip() {
-        pipWindow.hide()
-        video.parent = root.contentItem
-        root.show()
-    }
-
-    // --- auto-hide ------------------------------------------------------------
-    Timer {
-        id: autoHide
-        interval: 2500
-        running: mpv.playing && bar.state === "visible"
-        onTriggered: bar.hide()
+        const pt = btn.mapToItem(root, btn.width, btn.height + 6)
+        positionMenu(playlistPanel, pt.x, pt.y, true)
     }
 
     // --- open media ------------------------------------------------------------
     FileDialog {
         id: openDialog
-        title: qsTr("Open media")
+        title: qsTr("Média megnyitása")
+        fileMode: FileDialog.OpenFiles
         nameFilters: [
-            qsTr("Media files (%1)").arg("*.mp4 *.mkv *.webm *.avi *.mov *.flv *.m4v *.mp3 *.flac *.opus *.ogg *.wav"),
-            qsTr("All files (*)")
+            qsTr("Médiafájlok (%1)").arg("*.mp4 *.mkv *.webm *.avi *.mov *.flv *.m4v *.mp3 *.flac *.opus *.ogg *.wav"),
+            qsTr("Minden fájl (*)")
         ]
-        onAccepted: mpv.open(selectedFile)
+        onAccepted: mpv.openList(selectedFiles)
     }
 
-    Dialog {
-        id: urlDialog
-        title: qsTr("Open URL")
-        modal: true
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        implicitWidth: 460
+    // --- save playlist to an m3u file ----------------------------------------
+    FileDialog {
+        id: saveDialog
+        title: qsTr("Lejátszási lista mentése")
+        fileMode: FileDialog.SaveFile
+        nameFilters: [qsTr("M3U lejátszási lista (*.m3u)")]
+        onAccepted: mpv.savePlaylist(selectedFile)
+    }
 
-        contentItem: TextField {
-            id: urlField
-            placeholderText: qsTr("https://…")
-            onAccepted: urlDialog.accept()
+    // --- open URL (same frosted-glass design as the context menu) --------------
+    Popup {
+        id: urlDialog
+        modal: true
+        width: 440
+        x: (root.width - width) / 2
+        y: (root.height - height) / 2
+        padding: 0
+
+        background: Rectangle {
+            radius: 12
+            color: Colors.overlay
+            border.color: Colors.border
+            border.width: 1
         }
 
-        onAccepted: mpv.open(urlField.text)
+        contentItem: Item {
+            id: body
+            width: urlDialog.width
+            implicitHeight: col.implicitHeight + 40
+
+            Column {
+                id: col
+                x: 20
+                y: 20
+                width: parent.width - 40
+                spacing: 16
+
+                Text {
+                    text: "URL megnyitása"
+                    font.pixelSize: 15
+                    font.weight: Font.DemiBold
+                    color: Colors.overlayText
+                }
+
+                TextField {
+                    id: urlField
+                    width: parent.width
+                    clip: true
+                    placeholderText: "https://…"
+                    placeholderTextColor: Colors.textDim
+                    color: Colors.overlayText
+                    font.pixelSize: 14
+                    topPadding: 11
+                    bottomPadding: 11
+                    leftPadding: 14
+                    rightPadding: 14
+
+                    background: Rectangle {
+                        radius: 9
+                        color: Colors.chrome
+                        border.color: urlField.activeFocus ? Colors.accent : Colors.border
+                        border.width: 1
+                        Behavior on border.color { ColorAnimation { duration: 120 } }
+                    }
+
+                    onAccepted: {
+                        mpv.open(urlField.text)
+                        urlDialog.close()
+                        urlField.clear()
+                    }
+                }
+
+                Row {
+                    spacing: 8
+                    anchors.right: parent.right
+
+                    Rectangle { // Mégse
+                        id: cancelBtn
+                        width: 88
+                        height: 34
+                        radius: 17
+                        color: cancelMouse.containsMouse ? Colors.hover : "transparent"
+                        Text {
+                            anchors.centerIn: parent
+                            text: "Mégse"
+                            font.pixelSize: 13
+                            color: cancelMouse.containsMouse ? Colors.overlayText : Colors.textDim
+                        }
+                        MouseArea {
+                            id: cancelMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            onClicked: urlDialog.close()
+                        }
+                    }
+
+                    Rectangle { // Megnyitás
+                        id: openBtn
+                        width: 100
+                        height: 34
+                        radius: 17
+                        color: openMouse.containsMouse || openMouse.pressed ? Colors.accentGlow : Colors.accent
+                        Behavior on color { ColorAnimation { duration: 110 } }
+                        Text {
+                            anchors.centerIn: parent
+                            text: "Megnyitás"
+                            font.pixelSize: 13
+                            font.weight: Font.DemiBold
+                            color: "#0b0b0e"
+                        }
+                        MouseArea {
+                            id: openMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            onClicked: {
+                                mpv.open(urlField.text)
+                                urlDialog.close()
+                                urlField.clear()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- playlist panel (the bar's ≡ button) ---------------------------------
+    Popup {
+        id: playlistPanel
+        width: 340
+        padding: 6
+        z: 50
+
+        // Row picked for Delete / Play — a playlist index (from the full mpv
+        // list, not the filtered view), or -1 when nothing is selected.
+        property int selectedIndex: -1
+        property bool draggingItem: false
+
+        background: Rectangle {
+            radius: 12
+            color: Colors.overlay
+            border.color: Colors.border
+            border.width: 1
+        }
+
+        contentItem: Column {
+            spacing: 6
+
+            Row {
+                width: parent.width
+                spacing: 6
+
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: qsTr("Lejátszási lista")
+                    font.pixelSize: 13
+                    font.weight: Font.DemiBold
+                    color: Colors.overlayText
+                    topPadding: 2
+                }
+                Item { height: 1; width: 8 }
+
+                // Search toggle.
+                IconButton {
+                    id: searchToggle
+                    implicitWidth: 26
+                    implicitHeight: 26
+                    glyph: "\uF002"                               // FA magnifier
+                    tip: qsTr("Keresés (Ctrl+F)")
+                    onClicked: {
+                        searchField.visible = !searchField.visible
+                        if (searchField.visible)
+                            searchField.forceActiveFocus()
+                        else {
+                            searchField.text = ""
+                            playlistPanel.applyFilter()
+                        }
+                    }
+                }
+                IconButton {
+                    id: saveList
+                    implicitWidth: 26
+                    implicitHeight: 26
+                    glyph: "\uF0C7"                               // FA floppy: save
+                    tip: qsTr("Lejátszási lista mentése")
+                    onClicked: saveDialog.open()
+                }
+                Item { height: 1; width: 8 }
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: qsTr("%1 tétel").arg(filteredModel.count)
+                    font.pixelSize: 11
+                    color: Colors.textDim
+                }
+            }
+
+            TextField {
+                id: searchField
+                visible: false
+                width: parent.width
+                placeholderText: qsTr("Keresés a listában…")
+                placeholderTextColor: Colors.textDim
+                color: Colors.overlayText
+                font.pixelSize: 12
+                topPadding: 7
+                bottomPadding: 7
+                leftPadding: 11
+                rightPadding: 11
+                onTextChanged: playlistPanel.applyFilter()
+
+                background: Rectangle {
+                    radius: 8
+                    color: Colors.chrome
+                    border.color: searchField.activeFocus ? Colors.accent : Colors.border
+                    border.width: 1
+                }
+            }
+
+            ListView {
+                id: playlistList
+                width: parent.width
+                height: Math.max(36, Math.min(320, filteredModel.count * 32 + 4))
+                clip: true
+                model: ListModel { id: filteredModel }
+
+                delegate: Rectangle {
+                    id: row
+                    required property var model
+                    width: playlistList.width
+                    height: 30
+                    radius: 7
+                    color: (mouseArea.containsMouse || model.current
+                            || playlistPanel.selectedIndex === model.realIndex)
+                            ? Colors.hover : "transparent"
+                    Behavior on color { ColorAnimation { duration: 90 } }
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 10
+                        anchors.rightMargin: 40
+                        spacing: 8
+
+                        Text {
+                            text: model.current ? "\uF00C" : String(model.realIndex + 1)
+                            color: model.current ? Colors.accent : Colors.textDim
+                            font.pixelSize: 12
+                            Layout.preferredWidth: 18
+                        }
+                        Text {
+                            text: model.title
+                            color: model.current || playlistPanel.selectedIndex === model.realIndex
+                                  ? Colors.overlayText : Colors.textDim
+                            font.pixelSize: 12
+                            elide: Text.ElideMiddle
+                            Layout.fillWidth: true
+                        }
+                    }
+
+                    // Drag reel icon on the right — the whole row is draggable.
+                    Text {
+                        anchors.right: parent.right
+                        anchors.rightMargin: 12
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "\uF5D0"                            // FA grip-vertical
+                        font.family: "Font Awesome 7 Free Solid"
+                        font.pixelSize: 12
+                        color: playlistPanel.draggingItem ? Colors.accent : Colors.textDim
+                    }
+
+                    MouseArea {
+                        id: mouseArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+
+                        // Drag reorder: vertical dragging lifts the row and
+                        // computes the drop target from its offset. Single
+                        // click selects (Delete removes); double click plays.
+                        drag.target: row
+                        drag.axis: Drag.YAxis
+                        drag.threshold: 12
+
+                        onClicked: {
+                            dragTimer.restart()
+                            playlistPanel.selectedIndex = model.realIndex
+                        }
+                        onDoubleClicked: {
+                            mpv.open(model.path)
+                            playlistPanel.close()
+                        }
+                        onReleased: {
+                            if (!playlistPanel.draggingItem)
+                                return
+                            dragTimer.stop()
+                            const from = model.realIndex
+                            const jumped = Math.round((row.y + row.height / 2) / row.height) - 1
+                            const maxF = filteredModel.count - 1
+                            const toF = Math.max(0, Math.min(maxF + 1, from + jumped))
+                            row.y = 0
+                            playlistPanel.draggingItem = false
+                            if (toF !== from && toF !== from + 1)
+                                playlistPanel.applyMove(from, toF)
+                        }
+
+                        onPressed: dragTimer.stop()
+                        onPositionChanged: {
+                            if (row.y !== 0 && mouseArea.drag.active)
+                                playlistPanel.draggingItem = true
+                        }
+                    }
+                }
+            }
+
+            Item {
+                width: parent.width
+                height: 22
+                visible: filteredModel.count === 0
+                Text {
+                    anchors.centerIn: parent
+                    text: playlistModel.count === 0 ? qsTr("Nincs média a listában")
+                                                    : qsTr("Nincs találat")
+                    font.pixelSize: 11
+                    color: Colors.textDim
+                }
+            }
+
+            // Bottom action row: play selected / remove selected.
+            Row {
+                width: parent.width
+                spacing: 8
+                visible: playlistPanel.selectedIndex >= 0
+
+                Rectangle {
+                    height: 28
+                    radius: 14
+                    color: playSel.containsMouse || playSel.pressed ? Colors.accentGlow : Colors.accent
+                    Behavior on color { ColorAnimation { duration: 110 } }
+                    Row {
+                        anchors.left: parent.left
+                        anchors.leftMargin: 14
+                        anchors.right: parent.right
+                        anchors.rightMargin: 14
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        spacing: 8
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: "\uF04B"                        // FA play
+                            font.family: "Font Awesome 7 Free Solid"
+                            font.pixelSize: 12
+                            color: "#0b0b0e"
+                        }
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: qsTr("Lejátszás")
+                            font.pixelSize: 12
+                            font.weight: Font.DemiBold
+                            color: "#0b0b0e"
+                        }
+                    }
+                    MouseArea {
+                        id: playSel
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: {
+                            const it = playlistPanel.itemAt(playlistPanel.selectedIndex)
+                            if (it && it.path)
+                                mpv.open(it.path)
+                        }
+                    }
+                }
+                Rectangle {
+                    height: 28
+                    radius: 14
+                    color: delSel.containsMouse ? Colors.hover : "transparent"
+                    Text {
+                        anchors.centerIn: parent
+                        text: qsTr("Törlés (Del)")
+                        font.pixelSize: 12
+                        color: delSel.containsMouse ? Colors.overlayText : Colors.textDim
+                    }
+                    MouseArea {
+                        id: delSel
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: playlistPanel.removeSelected()
+                    }
+                }
+                Item { height: 1; width: 1 }
+            }
+        }
+
+        // Full playlist list (mirrors every mpv playlist entry), kept inside
+        // the panel — a Popup can't reach models declared at window level.
+        ListModel { id: playlistModel }
+
+        // The short wait before a click counts as a selection (vs. the start
+        // of a double-click that plays). Delayed so drag-holds don't select.
+        Timer {
+            id: dragTimer
+            interval: 180
+            onTriggered: { /* selection already set in onClicked */ }
+        }
+
+        function itemAt(realIndex) {
+            for (var i = 0; i < filteredModel.count; i++) {
+                const it = filteredModel.get(i)
+                if (it.realIndex === realIndex)
+                    return it
+            }
+            return null
+        }
+
+        function applyMove(from, toF) {
+            const maxF = filteredModel.count - 1
+            if (toF > maxF + 1)
+                toF = maxF + 1
+            if (toF < 0)
+                toF = 0
+            if (toF === from || toF === from + 1)
+                return
+            // mpv playlist-move swaps the entry before the target index, so
+            // moving down needs one more (and -1 means "append at the end").
+            const mpvTo = toF > from ? Math.min(toF + 1, maxF + 1) : toF
+            const cmd = mpvTo > maxF ? -1 : mpvTo
+            mpv.movePlaylistItem(from, cmd)
+            playlistPanel.selectedIndex = cmd < 0 ? maxF : cmd
+            refresh()
+        }
+
+        function refresh() {
+            const items = mpv.playlistItems()
+            playlistModel.clear()
+            for (var i = 0; i < items.length; i++) {
+                playlistModel.append({ "title": items[i].title,
+                                       "path": items[i].path,
+                                       "current": items[i].current })
+            }
+            applyFilter()
+        }
+
+        function applyFilter() {
+            filteredModel.clear()
+            const q = searchField.text.trim().toLowerCase()
+            for (var i = 0; i < playlistModel.count; i++) {
+                const it = playlistModel.get(i)
+                if (!q || it.title.toLowerCase().indexOf(q) >= 0)
+                    filteredModel.append({ "title": it.title,
+                                           "path": it.path,
+                                           "current": it.current,
+                                           "realIndex": i })
+            }
+            if (playlistPanel.selectedIndex >= playlistModel.count)
+                playlistPanel.selectedIndex = playlistModel.count > 0 ? playlistModel.count - 1 : -1
+        }
+
+        function removeSelected() {
+            if (playlistPanel.selectedIndex < 0)
+                return
+            mpv.removePlaylistItem(playlistPanel.selectedIndex)
+            playlistPanel.selectedIndex = -1
+            refresh()
+        }
+    }
+    Popup {
+        id: settingsMenu
+        width: 380
+        padding: 6
+        z: 50
+
+        background: Rectangle {
+            radius: 12
+            color: Colors.overlay
+            border.color: Colors.border
+            border.width: 1
+        }
+
+        contentItem: Item {
+            width: settingsMenu.width - 12
+            implicitHeight: settingsCol.implicitHeight + 32
+
+            ColumnLayout {
+                id: settingsCol
+                anchors.fill: parent
+                anchors.margins: 16
+                spacing: 9
+
+                Text {
+                    text: qsTr("Beállítások")
+                    font.pixelSize: 15
+                    font.weight: Font.DemiBold
+                    color: Colors.overlayText
+                }
+
+                Text {
+                    text: qsTr("Lejátszás")
+                    font.pixelSize: 11
+                    font.weight: Font.DemiBold
+                    color: Colors.accent
+                }
+                ValueSlider { vsLabel: qsTr("Sebesség"); vsMin: 25; vsMax: 400; vsStep: 5;
+                              vsInteger: true; vsValue: Math.round(mpv.speed * 100);
+                              onChanged: v => mpv.speed = v / 100 }
+
+                Text {
+                    text: qsTr("Videó színek")
+                    font.pixelSize: 11
+                    font.weight: Font.DemiBold
+                    color: Colors.accent
+                }
+                ValueSlider { vsLabel: qsTr("Fényerő");     vsValue: mpv.brightness;
+                              onChanged: v => mpv.brightness = v }
+                ValueSlider { vsLabel: qsTr("Kontraszt");   vsValue: mpv.contrast;
+                              onChanged: v => mpv.contrast = v }
+                ValueSlider { vsLabel: qsTr("Telítettség"); vsValue: mpv.saturation;
+                              onChanged: v => mpv.saturation = v }
+                ValueSlider { vsLabel: qsTr("Gamma");       vsValue: mpv.gamma;
+                              onChanged: v => mpv.gamma = v }
+
+                Text {
+                    text: qsTr("Feliratok")
+                    font.pixelSize: 11
+                    font.weight: Font.DemiBold
+                    color: Colors.accent
+                }
+                RowLayout {
+                    Text {
+                        text: qsTr("Megjelenítés")
+                        color: Colors.overlayText
+                        font.pixelSize: 12
+                    }
+                    Item { Layout.fillWidth: true }
+                    Rectangle {
+                        id: subToggle
+                        Layout.preferredWidth: 58
+                        Layout.preferredHeight: 26
+                        radius: 13
+                        color: mpv.subtitlesVisible ? Colors.accent : Colors.hover
+                        Behavior on color { ColorAnimation { duration: 100 } }
+                        Text {
+                            anchors.centerIn: parent
+                            text: mpv.subtitlesVisible ? qsTr("Be") : qsTr("Ki")
+                            font.pixelSize: 12
+                            font.weight: Font.DemiBold
+                            color: mpv.subtitlesVisible ? "#0b0b0e" : Colors.textDim
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            onClicked: mpv.toggleSubtitles()
+                        }
+                    }
+                }
+                ValueSlider { vsLabel: qsTr("Betűméret"); vsMin: 50; vsMax: 200; vsStep: 5;
+                              vsInteger: true; vsValue: Math.round(mpv.subScale * 100);
+                              onChanged: v => mpv.subScale = v / 100 }
+
+                Text {
+                    text: qsTr("Hang")
+                    font.pixelSize: 11
+                    font.weight: Font.DemiBold
+                    color: Colors.accent
+                }
+                ValueSlider { vsLabel: qsTr("Késleltetés"); vsMin: -2000; vsMax: 2000; vsStep: 100;
+                              vsInteger: true; vsValue: Math.round(mpv.audioDelay * 1000);
+                              onChanged: v => mpv.audioDelay = v / 1000 }
+
+                RowLayout {
+                    Item { Layout.fillWidth: true }
+                    Rectangle {
+                        id: resetBtn
+                        Layout.preferredWidth: 120
+                        Layout.preferredHeight: 30
+                        radius: 15
+                        color: resetMouse.containsMouse ? Colors.hover : "transparent"
+                        Text {
+                            anchors.centerIn: parent
+                            text: qsTr("Alaphelyzet")
+                            font.pixelSize: 12
+                            color: resetMouse.containsMouse ? Colors.overlayText : Colors.textDim
+                        }
+                        MouseArea {
+                            id: resetMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            onClicked: {
+                                mpv.speed = 1.0
+                                mpv.brightness = 0
+                                mpv.contrast = 0
+                                mpv.saturation = 0
+                                mpv.gamma = 0
+                                mpv.subScale = 1.0
+                                mpv.audioDelay = 0
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // --- drag & drop ------------------------------------------------------------
@@ -239,148 +988,23 @@ ApplicationWindow {
 
     // --- keyboard ----------------------------------------------------------------
     Shortcut { sequence: "Space"; onActivated: mpv.togglePause() }
-    Shortcut { sequence: "P"; onActivated: root.togglePip() }
     Shortcut { sequence: "Left"; onActivated: mpv.seekRelative(-5) }
     Shortcut { sequence: "Right"; onActivated: mpv.seekRelative(5) }
     Shortcut { sequence: "Up"; onActivated: mpv.setVolume(Math.min(mpv.volume + 10, 150)) }
     Shortcut { sequence: "Down"; onActivated: mpv.setVolume(Math.max(mpv.volume - 10, 0)) }
     Shortcut { sequence: "M"; onActivated: mpv.toggleMute() }
     Shortcut { sequence: "F"; onActivated: root.toggleFullscreen() }
+    Shortcut { sequence: "I"; onActivated: mpv.toggleMinimize() }
+    // Playback speed (mpv default bindings: halve / double).
+    Shortcut { sequence: "["; onActivated: mpv.speed = Math.max(0.25, mpv.speed / 2) }
+    Shortcut { sequence: "]"; onActivated: mpv.speed = Math.min(4, mpv.speed * 2) }
+    // Playlist navigation (mpv): [n]ext / [p]revious.
+    Shortcut { sequence: "N"; onActivated: mpv.playlistNext() }
+    Shortcut { sequence: "P"; onActivated: mpv.playlistPrevious() }
+    Shortcut { sequence: "Delete"; onActivated: playlistPanel.removeSelected() }
+    Shortcut { sequence: "Ctrl+F"; onActivated: searchToggle.clicked() }
     Shortcut { sequence: "Ctrl+O"; onActivated: openDialog.open() }
     Shortcut { sequence: "Ctrl+S"; onActivated: mpv.takeScreenshot() }
-    Shortcut { sequence: "Esc"; onActivated: root.visibility = Window.Windowed }
+    Shortcut { sequence: "Esc"; onActivated: { root.isFullScreen = false; mpv.windowFullscreen(false) } }
     Shortcut { sequence: "Ctrl+0"; onActivated: mpv.setVolume(100) }
-
-    // --- picture-in-picture window -------------------------------------------
-    // Small always-on-top frame that hosts the re-parented video item. It is
-    // freely resizable with the mouse; the current size is cached so a
-    // re-opened PiP keeps its previous size.
-    Window {
-        id: pipWindow
-        visible: false
-
-        width: root.pipW
-        height: root.pipH
-        minimumWidth: 160
-        minimumHeight: 90
-        color: "black"
-        title: qsTr("PiP: %1").arg(mpv.mediaTitle.length > 0 ? mpv.mediaTitle : qsTr("Omaplayer"))
-
-        flags: Qt.Window | Qt.FramelessWindowHint
-               | Qt.WindowStaysOnTopHint
-
-        onWidthChanged: root.pipW = width
-        onHeightChanged: root.pipH = height
-
-        // The re-parented video item fills the contentItem; every chrome
-        // element below uses explicit z so it floats above the video.
-        Rectangle {
-            anchors.fill: parent
-            z: -1
-            color: "transparent"
-            border.color: Colors.border
-            border.width: 1
-        }
-
-        // Title strip: drag to move, close button, double-click to exit.
-        Rectangle {
-            id: pipTitle
-            height: 26
-            z: 10
-            color: Colors.chrome
-            anchors { left: parent.left; right: parent.right; top: parent.top }
-
-            MouseArea {
-                anchors.fill: parent
-                onPressed: mouse => pipWindow.startSystemMove()
-                onDoubleClicked: mouse => root.exitPip()
-                hoverEnabled: true
-            }
-
-            Text {
-                anchors.left: parent.left
-                anchors.leftMargin: 8
-                anchors.verticalCenter: parent.verticalCenter
-                text: qsTr("Omaplayer — kis kép a képen")
-                color: Colors.overlayText
-                font.pixelSize: 11
-            }
-
-            IconButton {
-                id: pipExit
-                glyph: "\uF00D"          // FA xmark
-                tip: qsTr("Bezárás (PiP kilépés)")
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
-                implicitWidth: 24
-                implicitHeight: 24
-                onClicked: root.exitPip()
-            }
-        }
-
-        // Click the video to exit PiP; scroll to nudge volume.
-        MouseArea {
-            id: pipGestures
-            anchors.fill: parent
-            z: 5
-            acceptedButtons: Qt.LeftButton
-            onClicked: root.exitPip()
-            onWheel: wheel => {
-                if (wheel.modifiers & Qt.ControlModifier)
-                    mpv.setVolume(Math.max(0, Math.min(150, mpv.volume + wheel.angleDelta.y / 8)))
-                else
-                    mpv.seekRelative(wheel.angleDelta.y > 0 ? 5 : -5)
-            }
-        }
-
-        // Cheap native resize first; some compositors ignore the interactive
-        // resize request, so fall back to manual size tracking (grow-only,
-        // since a frameless window cannot be repositioned by the client).
-        PipResizeGrip {
-            z: 20
-            edges: Qt.RightEdge
-            anchors.right: parent.right
-            anchors.top: parent.top
-            anchors.topMargin: 26
-            anchors.bottom: parent.bottom
-            width: 6
-        }
-        PipResizeGrip {
-            z: 20
-            edges: Qt.BottomEdge
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            height: 6
-        }
-        PipResizeGrip {
-            z: 20
-            edges: Qt.LeftEdge
-            anchors.left: parent.left
-            anchors.top: parent.top
-            anchors.topMargin: 26
-            anchors.bottom: parent.bottom
-            width: 6
-        }
-        PipResizeGrip {
-            z: 20
-            edges: Qt.RightEdge | Qt.BottomEdge
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            width: 16
-            height: 16
-        }
-        PipResizeGrip {
-            z: 20
-            edges: Qt.LeftEdge | Qt.BottomEdge
-            anchors.left: parent.left
-            anchors.bottom: parent.bottom
-            width: 16
-            height: 16
-        }
-
-        Shortcut { sequence: "Escape"; onActivated: root.exitPip() }
-        Shortcut { sequence: "P"; onActivated: root.exitPip() }
-        Shortcut { sequence: "Space"; onActivated: mpv.togglePause() }
-    }
 }
