@@ -1,2 +1,6 @@
 build/
 *.user
+packaging/src/
+packaging/pkg/
+packaging/*.tar.gz
+packaging/*.pkg.tar.zst

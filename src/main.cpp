@@ -11,7 +11,18 @@
 
 int main(int argc, char *argv[])
 {
+    // NVIDIA driver 580.178.04 segfaults (SIGSEGV in libnvidia-eglcore during
+    // QRhi::endFrame) when Qt Quick presents over the setup the in-code
+    // setGraphicsApi() below selects; the QSG_RHI_BACKEND environment variable
+    // is honored earlier and avoids the crash, so set it before the
+    // QGuiApplication is constructed.
+    qputenv("QSG_RHI_BACKEND", "opengl");
+
     QGuiApplication app(argc, argv);
+    // PiP toggles the window set (one hides while the other maps), which must
+    // not end the session just because no window happens to be visible in that
+    // instant.
+    QGuiApplication::setQuitOnLastWindowClosed(false);
 
     // libmpv refuses to create a handle while LC_NUMERIC is non-C (it would
     // misparse decimals). Qt resets the locale from the environment, so force
@@ -47,7 +58,7 @@ int main(int argc, char *argv[])
     // and must be skipped before picking the media path).
     for (int i = 1; i < argc; i++) {
         const QString arg = QString::fromLocal8Bit(argv[i]);
-        if (arg.startsWith(QLatin1String("--")))
+if (arg.startsWith(QLatin1String("--")))
             continue;
         MpvCore::instance()->open(arg);
         break;
