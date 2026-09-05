@@ -68,6 +68,7 @@ public:
 
     Q_INVOKABLE void open(const QString &location);
     Q_INVOKABLE void openList(const QStringList &files);
+    Q_INVOKABLE void appendToPlaylist(const QStringList &files);
     Q_INVOKABLE QVariantList playlistItems();
     Q_INVOKABLE bool hasNext();
     Q_INVOKABLE bool hasPrevious();

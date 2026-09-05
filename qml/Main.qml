@@ -78,10 +78,13 @@ ApplicationWindow {
         anchors.fill: parent
         z: 1
         acceptedButtons: Qt.LeftButton | Qt.RightButton
-        enabled: !contextMenu.visible && !urlDialog.visible
 
         onClicked: mouse => {
             bar.show()
+            if (urlDialog.visible) { urlDialog.close(); return }
+            if (settingsMenu.visible) { settingsMenu.close(); return }
+            if (playlistPanel.visible) { playlistPanel.close(); return }
+            if (contextMenu.visible) { contextMenu.close(); return }
             if (mouse.button === Qt.RightButton)
                 contextMenu.openAt(mouse.x, mouse.y)
             else
@@ -281,30 +284,39 @@ ApplicationWindow {
     ResizeGrip { z: 100; edges: Qt.TopEdge | Qt.LeftEdge; width: 22; height: 22; anchors.left: parent.left; anchors.top: parent.top }
     ResizeGrip { z: 100; edges: Qt.TopEdge | Qt.RightEdge; width: 22; height: 22; anchors.right: parent.right; anchors.top: parent.top }
 
-    Popup {
+    Item {
         id: contextMenu
         width: 210
-        padding: 6
+        visible: false
         z: 50
 
         // Screen-space feel: body sits at the cursor, clamped inside the window.
         function openAt(x, y) {
             contextMenu.x = Math.min(Math.max(6, x), root.width - contextMenu.width - 6)
             contextMenu.y = Math.min(Math.max(6, y), root.height - contextMenu.height - 6)
-            contextMenu.open()
+            contextMenu.visible = true
         }
+        function close() { visible = false }
 
-        background: Rectangle {
+        height: Math.min(ctxCol.implicitHeight + 12, root.height - 12)
+
+        Rectangle {
+            anchors.fill: parent
             radius: 12
             color: Colors.overlay
             border.color: Colors.border
             border.width: 1
         }
 
-        contentItem: Flickable {
+        Flickable {
+            anchors {
+                left: parent.left
+                right: parent.right
+                top: parent.top
+                bottom: parent.bottom
+                margins: 6
+            }
             clip: true
-            implicitHeight: Math.min(ctxCol.implicitHeight, root.height - 24)
-            height: implicitHeight
             contentWidth: ctxCol.implicitWidth
             contentHeight: ctxCol.implicitHeight
 
@@ -374,6 +386,21 @@ ApplicationWindow {
         onAccepted: mpv.openList(selectedFiles)
     }
 
+    // --- add files to the playlist (does not disturb current playback) ------
+    FileDialog {
+        id: addFilesDialog
+        title: qsTr("Fájlok hozzáadása a listához")
+        fileMode: FileDialog.OpenFiles
+        nameFilters: [
+            qsTr("Médiafájlok (%1)").arg("*.mp4 *.mkv *.webm *.avi *.mov *.flv *.m4v *.mp3 *.flac *.opus *.ogg *.wav"),
+            qsTr("Minden fájl (*)")
+        ]
+        onAccepted: {
+            mpv.appendToPlaylist(selectedFiles)
+            playlistPanel.refresh()
+        }
+    }
+
     // --- save playlist to an m3u file ----------------------------------------
     FileDialog {
         id: saveDialog
@@ -384,32 +411,32 @@ ApplicationWindow {
     }
 
     // --- open URL (same frosted-glass design as the context menu) --------------
-    Popup {
+    Item {
         id: urlDialog
-        modal: true
+        visible: false
+        z: 60
         width: 440
         x: (root.width - width) / 2
         y: (root.height - height) / 2
-        padding: 0
+        height: col.implicitHeight + 40
 
-        background: Rectangle {
+        function open() { visible = true }
+        function close() { visible = false }
+
+        Rectangle {
+            anchors.fill: parent
             radius: 12
             color: Colors.overlay
             border.color: Colors.border
             border.width: 1
         }
 
-        contentItem: Item {
-            id: body
-            width: urlDialog.width
-            implicitHeight: col.implicitHeight + 40
-
-            Column {
-                id: col
-                x: 20
-                y: 20
-                width: parent.width - 40
-                spacing: 16
+        Column {
+            id: col
+            x: 20
+            y: 20
+            width: parent.width - 40
+            spacing: 16
 
                 Text {
                     text: "URL megnyitása"
@@ -497,44 +524,49 @@ ApplicationWindow {
                     }
                 }
             }
-        }
     }
 
     // --- playlist panel (the bar's ≡ button) ---------------------------------
     // A right-edge drawer: it never leaves the window, so it stays usable on
     // the small floating player. It slides in/out along x and re-lays out the
     // list vertically to fill the drawer height.
-    Popup {
+    Item {
         id: playlistPanel
-        modal: true
-        padding: 6
+        visible: false
         z: 50
 
         x: root.width - width - 4
         y: 4
-        width: Math.min(400, root.width - 8)
+        width: Math.max(240, Math.min(400, Math.round(root.width * 0.62)))
         height: root.height - 8
 
-        enter: Transition {
-            NumberAnimation { property: "x"; from: root.width; duration: 250; easing.type: Easing.OutCubic }
-        }
-        exit: Transition {
-            NumberAnimation { property: "x"; to: root.width; duration: 210; easing.type: Easing.InCubic }
-        }
+        // A plain in-window panel instead of a Popup: an Overlay popup becomes
+        // a native xdg-popup surface on Wayland and steals the keyboard focus
+        // from the main window, so G/L/Esc would never work again. An Item
+        // keeps the focus on the window and the shortcuts alive.
 
         // Row picked for Delete / Play — a playlist index (from the full mpv
         // list, not the filtered view), or -1 when nothing is selected.
         property int selectedIndex: -1
         property bool draggingItem: false
 
-        background: Rectangle {
+        function open() { visible = true }
+        function close() { visible = false }
+
+        Rectangle {
+            anchors.fill: parent
             radius: 12
             color: Colors.overlay
             border.color: Colors.border
             border.width: 1
         }
 
-        contentItem: ColumnLayout {
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.topMargin: 6
+            anchors.leftMargin: 6
+            anchors.rightMargin: 6
+            anchors.bottomMargin: 6
             spacing: 6
 
             Row {
@@ -575,6 +607,14 @@ ApplicationWindow {
                     glyph: "\uF0C7"                               // FA floppy: save
                     tip: qsTr("Lejátszási lista mentése")
                     onClicked: saveDialog.open()
+                }
+                IconButton {
+                    id: addFiles
+                    implicitWidth: 26
+                    implicitHeight: 26
+                    glyph: "\uF055"                               // FA circle-plus
+                    tip: qsTr("Fájlok hozzáadása")
+                    onClicked: addFilesDialog.open()
                 }
                 Item { height: 1; width: 8 }
                 Text {
@@ -867,32 +907,36 @@ ApplicationWindow {
     // A right-edge drawer like the playlist panel: it stays inside the window
     // at any size (the subtitles block used to overflow out of the short
     // floating window), and the body scrolls when the content is taller.
-    Popup {
+    Item {
         id: settingsMenu
-        modal: true
-        padding: 6
+        visible: false
         z: 50
 
         x: root.width - width - 4
         y: 4
-        width: Math.min(380, root.width - 8)
+        width: Math.max(240, Math.min(380, Math.round(root.width * 0.62)))
         height: root.height - 8
 
-        enter: Transition {
-            NumberAnimation { property: "x"; from: root.width; duration: 250; easing.type: Easing.OutCubic }
-        }
-        exit: Transition {
-            NumberAnimation { property: "x"; to: root.width; duration: 210; easing.type: Easing.InCubic }
-        }
+        // Plain in-window panel — see playlistPanel: no native popup surface,
+        // keyboard focus (and G/L/Esc) stay on the main window.
 
-        background: Rectangle {
+        function open() { visible = true }
+        function close() { visible = false }
+
+        Rectangle {
+            anchors.fill: parent
             radius: 12
             color: Colors.overlay
             border.color: Colors.border
             border.width: 1
         }
 
-        contentItem: ColumnLayout {
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.topMargin: 6
+            anchors.leftMargin: 6
+            anchors.rightMargin: 6
+            anchors.bottomMargin: 6
             spacing: 6
 
             Row {
@@ -1061,6 +1105,8 @@ ApplicationWindow {
     Shortcut { sequence: "M"; onActivated: mpv.toggleMute() }
     Shortcut { sequence: "F"; onActivated: root.toggleFullscreen() }
     Shortcut { sequence: "I"; onActivated: mpv.toggleMinimize() }
+    Shortcut { sequence: "G"; onActivated: openSettings() }
+    Shortcut { sequence: "L"; onActivated: openPlaylist() }
     // Playback speed (mpv default bindings: halve / double).
     Shortcut { sequence: "["; onActivated: mpv.speed = Math.max(0.25, mpv.speed / 2) }
     Shortcut { sequence: "]"; onActivated: mpv.speed = Math.min(4, mpv.speed * 2) }
@@ -1074,6 +1120,7 @@ ApplicationWindow {
     Shortcut { sequence: "Esc"; onActivated: {
         if (settingsMenu.visible) { settingsMenu.close(); return }
         if (playlistPanel.visible) { playlistPanel.close(); return }
+        if (urlDialog.visible) { urlDialog.close(); return }
         if (root.isFullScreen) { root.isFullScreen = false; mpv.windowFullscreen(false) }
     } }
     Shortcut { sequence: "Ctrl+0"; onActivated: mpv.setVolume(100) }

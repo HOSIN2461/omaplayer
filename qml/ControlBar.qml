@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Layouts
 import QtQuick.Effects
 import Omaplayer
 
@@ -182,29 +181,30 @@ Item {
             IconButton {
                 id: gearBtn
                 glyph: "\uF013"                                 // FA cog
-                tip: qsTr("Beállítások")
+                tip: qsTr("Beállítások (G)")
                 onClicked: { if (bar.onSettings) bar.onSettings() }
             }
 
             IconButton {
                 id: menuBtn
                 glyph: "\uF0C9"                                 // FA bars: playlist
-                tip: qsTr("Lejátszási lista")
+                tip: qsTr("Lejátszási lista (L)")
                 onClicked: { if (bar.onPlaylist) bar.onPlaylist() }
             }
         }
 
-        // --- film timeline, right at the bottom ----------------------------
+        // --- scrubber: playback progress bar, sits directly under the
+        // controls (volume slider) and is draggable to seek in the media ----
         Item {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            Layout.topMargin: 4
+            id: scrub
+            width: parent.width
+            height: 32
 
-            // Thin resting track that thickens while hovering/dragging.
+            // Resting track; thickens while hovering/dragging.
             Rectangle {
                 id: track
-                y: parent.height / 2 - 2
-                height: 4
+                y: parent.height / 2 + 3
+                height: (seek.containsMouse || seek.dragging) ? 8 : 5
                 radius: height / 2
                 color: Colors.track
                 Behavior on height { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
@@ -248,7 +248,7 @@ Item {
                 }
             }
 
-            // invisible wide strip for hover + drag
+            // Full-height invisible strip for hover + drag.
             MouseArea {
                 id: seek
                 property bool dragging: false
@@ -295,7 +295,7 @@ Item {
                 Behavior on opacity { NumberAnimation { duration: 90 } }
 
                 x: clampSeq(0, parent.width - width, track.x + position * track.width - width / 2)
-                y: 0
+                y: 2
 
                 Text {
                     anchors.centerIn: parent
@@ -306,10 +306,9 @@ Item {
             }
         }
 
-        // --- time readout, centered under the timeline ----------------------
+        // --- time readout, centered under the scrubber ---------------------
         Text {
-            Layout.alignment: Qt.AlignHCenter
-            Layout.topMargin: 1
+            anchors.horizontalCenter: parent.horizontalCenter
             text: fmtTime(mpv.position) + " / " + fmtTime(mpv.duration)
             color: Colors.textDim
             font.pixelSize: 11

@@ -575,6 +575,24 @@ void MpvCore::openList(const QStringList &files)
     mpv_set_property_string(m_handle, "pause", "no");
 }
 
+void MpvCore::appendToPlaylist(const QStringList &files)
+{
+    if (!m_handle || files.isEmpty())
+        return;
+    if (!m_renderContext) {
+        m_pendingOpen = true;
+        m_pendingFiles = m_pendingFiles + files;
+        return;
+    }
+    // "append-play" adds each file to the playlist without touching whatever
+    // is currently playing; if nothing is loaded yet, the first file starts.
+    for (const QString &f : files) {
+        const QByteArray fn = f.toUtf8();
+        const char *cmd[] = { "loadfile", fn.constData(), "append-play", nullptr };
+        mpv_command(m_handle, cmd);
+    }
+}
+
 QVariantList MpvCore::playlistItems()
 {
     QVariantList out;
