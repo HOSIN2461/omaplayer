@@ -23,7 +23,9 @@ Item {
     readonly property bool anywhereHovered: barArea.containsMouse
     readonly property bool dragActive: seek.dragging
 
-    height: 112
+    // Height follows the window so a small floating window keeps its video
+    // visible; the compact layout (82px) still fits every control."
+    height: Math.min(112, Math.max(82, parent.height * 0.32))
 
     opacity: exposed ? 1 : 0
     y: exposed ? 0 : 122
@@ -85,13 +87,17 @@ Item {
         // --- control rows ====  volume .. transport .. gear/menu ------
         // The whole control cluster is centered in the pill instead of being
         // stretched edge-to-edge, so it never crowds a narrow floating window.
+        // Sections collapse as the window narrows: volume goes first, then
+        // the prev/next pair — the core play/stop + gear/menu always stay.
         Row {
+            id: ctrlRow
             anchors.horizontalCenter: parent.horizontalCenter
             spacing: 10
 
             // Volume.
             IconButton {
                 id: volBtn
+                visible: pill.width >= 484
                 glyph: mpv.muted ? "\uF6A9"
                      : mpv.volume < 1 ? "\uF026"
                      : mpv.volume < 50 ? "\uF027"
@@ -102,6 +108,7 @@ Item {
 
             Slider {
                 id: volSlider
+                visible: pill.width >= 484
                 width: 96
                 height: 24
                 from: 0
@@ -144,11 +151,12 @@ Item {
                 }
             }
 
-            Item { width: 6; height: 1 }
+            Item { id: spacerA; width: 6; height: 1; visible: pill.width >= 484 }
 
             // Transport — previous / play / stop / next.
             IconButton {
                 id: prevBtn
+                visible: pill.width >= 324
                 glyph: "\uF048"                                 // FA backward-step
                 tip: qsTr("Előző (P)")
                 onClicked: mpv.playlistPrevious()
@@ -170,12 +178,13 @@ Item {
 
             IconButton {
                 id: nextBtn
+                visible: pill.width >= 324
                 glyph: "\uF051"                                 // FA forward-step
                 tip: qsTr("Következő (N)")
                 onClicked: mpv.playlistNext()
             }
 
-            Item { width: 6; height: 1 }
+            Item { id: spacerB; width: 6; height: 1; visible: pill.width >= 324 }
 
             // Settings gear + hamburger menu.
             IconButton {
@@ -198,7 +207,7 @@ Item {
         Item {
             id: scrub
             width: parent.width
-            height: 32
+            height: 26
 
             // Resting track; thickens while hovering/dragging.
             Rectangle {

@@ -545,7 +545,7 @@ ApplicationWindow {
         y: 4
         width: root.drawerWidth
         // Stops above the control bar so the transport row stays reachable.
-        height: root.height - 124
+        height: root.height - bar.height - 16
 
         // A plain in-window panel instead of a Popup: an Overlay popup becomes
         // a native xdg-popup surface on Wayland and steals the keyboard focus
@@ -933,7 +933,7 @@ ApplicationWindow {
         y: 4
         width: root.drawerWidth
         // Stops above the control bar so the transport row stays reachable.
-        height: root.height - 124
+        height: root.height - bar.height - 16
 
         // Plain in-window panel — see playlistPanel: no native popup surface,
         // keyboard focus (and G/L/Esc) stay on the main window.

@@ -95,6 +95,16 @@ int main(int argc, char *argv[])
     fprintf(stderr, "BOOT after loadFromModule, rootObjects=%d\n", int(engine.rootObjects().size()));
     fflush(stderr);
 
+    // Test hook: OMAPLAYER_WIN_W/H lets us launch the floating window at a
+    // given size (hyprctl resize is unusable on the Lua config). Overrides the
+    // normal size gracefully — set both, or neither is used.
+    if (auto *win = qobject_cast<QQuickWindow *>(engine.rootObjects().value(0))) {
+        const int tw = qEnvironmentVariableIntValue("OMAPLAYER_WIN_W");
+        const int th = qEnvironmentVariableIntValue("OMAPLAYER_WIN_H");
+        if (tw > 0 && th > 0)
+            win->resize(tw, th);
+    }
+
     // --- MPRIS (org.mpris.MediaPlayer2) over session D-Bus — media keys,
     // mixer strips and the desktop shell's media widget drive the player.
     MpvCore::instance(); // ensure the singleton exists before adaptors attach
