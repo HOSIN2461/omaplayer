@@ -6,8 +6,8 @@
 # (A .git nélkül a cmake as-is épít; a CPack/install azonos marad.)
 
 pkgname=omaplayer
-pkgver=0.1.0
-pkgrel=5
+pkgver=0.1.1
+pkgrel=1
 pkgdesc="Magyar videolejátszó – mpv alapra építve (Qt Quick)"
 arch=('x86_64')
 url="https://github.com/HOSIN2461/omaplayer"

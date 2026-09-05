@@ -1,21 +1,48 @@
 # omaplayer
 
-Videolejátszó Omarchy (Arch Linux) rendszerre — Qt Quick és a libmpv
-render API-ra építve. Natív Wayland, erős hardveres dekódolás (mpv/NVDEC),
-részben magyar felület (a fordítás folyamatban).
+Natív Qt Quick videolejátszó Omarchy / Arch Linux rendszerre, a libmpv
+render API-jára építve. Wayland-őshonos, hardveres dekódolás (mpv/NVDEC),
+magyar felülettel.
 
 ## Funkciók
 
-- mpv motor (`libmpv` render API + property/command API) — széles
-  kodek-, hálózati és eszköz-támogatás
-- Részben magyar felület: a gombok és a fő vezérlőszövegek magyarra
-  fordítva (`translations/hu.ts`, minden meglévő `qsTr()` lefedve); a
-  még le nem fordított részek angolul jelennek meg
-- Picture-in-Picture: `--pip` kapcsolóval automatikusan is (vagy gombbal /
-  `P` billentyűvel), átméretezhető ablak, a videóra kattintva kilép
-- Teljes képernyős mód
-- Billentyűk: `←`/`→` keresés ±5 mp, `↑`/`↓` hangerő ±10%
-- URL-ek is lejátszhatók (yt-dlp telepítése esetén YouTube és társai is)
+- **mpv motor** — széles kodek-, konténer- és hálózati támogatás; hardveres
+  dekódolás (vaapi/nvdec) az mpv-n keresztül
+- **Friss vezérlősáv**: keresősáv automatikus folytatással (a tekercselést
+  szünetből a keresés után folytatja), hátralévő idő kijelzés, a bár
+  igazodik az ablak méretéhez (keskeny ablakban a gomb-blokkok kicsúsznak)
+- **Könyvtár (G) és Beállítások (L) fiókok** — azonos méret, egyszerre
+  csak az egyik lehet nyitva, a vezérlősáv felett jelennek meg; a
+  lejátszási lista **élőben követi a lejátszott elemet** (kiemelés)
+- **Csoportos fájlbetöltés**: natív GTK fájlválasztó multi-selejtekkel
+  (`Ctrl+O` megnyitás, „Fájlok hozzáadása a listához" — a lejátszást nem
+  szakítja meg)
+- **CLI**: több fájl parancssorból is indítható (`omaplayer a.mp4 b.mp4 …`)
+- **Beállítások**: hangerő/speeds, fényerő/kontraszt/telítettség/gamma,
+  felirat-méret, hang-késleltetés, feliratok ki/be
+- **MPRIS** (D-Bus) — media-kulcsok, GNOME/Wayland média-integráció
+- **Képernyőkép** `Ctrl+S`-re
+- `yt-dlp` telepítése esetén webes források (YouTube stb.) is lejátszhatók
+
+## Billentyűk
+
+| Billentyű | Hatás |
+|---|---|
+| `Szóköz` | lejátszás / szünet |
+| `←` / `→` | keresés ±5 mp |
+| `↑` / `↓` | hangerő ±10% |
+| `M` | némítás |
+| `F` | teljes képernyő |
+| `I` | ablak méret ciklus |
+| `G` / `L` | beállítások / lejátszási lista |
+| `[` / `]` | sebesség felezése / duplázása (0.25–4×) |
+| `N` / `P` | következő / előző lista-elem |
+| `Törlés` | kijelölt lista-elem törlése |
+| `Ctrl+F` | lista keresés |
+| `Ctrl+O` | fájl(ok) megnyitása |
+| `Ctrl+S` | pillanatkép |
+| `Ctrl+0` | hangerő 100% |
+| `Esc` | fiókok / teljes képernyő bezárása |
 
 ## Építés
 
@@ -24,33 +51,31 @@ Követelmények: Qt 6.5+, CMake 3.28+, Ninja, libmpv.
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
 cmake --build build
+DESTDIR="$PWD/stage" cmake --install build   # opcionális, csomagoláshoz
 ```
 
-## Telepítés
+## Telepítés (Arch / Omarchy)
 
-Csomag a `packaging/PKGBUILD`-del (felhasználóként, root nélkül):
+A repo `packaging/PKGBUILD`-je a `git+` forrásból, a `v$pkgver` tag-ből épül —
+a csomag így mindig a GitHubon lévő állapotból indul:
 
 ```sh
 cd packaging
-makepkg -Cf
+makepkg -s
 sudo pacman -U omaplayer-*.pkg.tar.zst
 ```
 
-## Használat
+Függőségek: `qt6-base` `qt6-declarative` `qt6-wayland` `mpv`; opcionálisan
+`yt-dlp` a webes lejátszáshoz.
 
-```sh
-omaplayer film.mp4
-omaplayer "https://www.youtube.com/watch?v=..."
-omaplayer --pip film.mp4   # azonnal picture-in-picture
-```
+## Megjegyzés a fájlválasztóról
 
-## Ismert problémák
+A natív (GTK) választó abban az egyetlen mód, ami igazán multi-selected —
+ezért az app kényszeríti a `gtk3` QPA témát (a `qt6-base` magában hordozza
+a plugint). A választó megjelenése ~0.6 s (a GTK chooser belső felépítése),
+a tematizálástól függetlenül; a Qt-fallback dialógus gyorsabb lenne, de csak
+egyetlen fájlt enged kijelölni — a csoportos betöltés miatt a GTK-t használjuk.
 
-- **NVIDIA 580.178.04 driver összeomlás (SIGSEGV az `libnvidia-eglcore`-ban
-  `QRhi::endFrame` közben).** A Qt Quick alapértelmezett RHI beállítása
-  kiválthatja; a fix: `QSG_RHI_BACKEND=opengl` a `QGuiApplication` előtt
-  (a `src/main.cpp` ezt már beállítja). Más backendar kipróbálásához:
+## Licenc
 
-  ```sh
-  QSG_RHI_BACKEND=vulkan omaplayer film.mp4
-  ```
+MIT — lásd `LICENSE`.
