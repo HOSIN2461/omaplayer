@@ -1,15 +1,16 @@
 # omaplayer
 
-Magyar videolejátszó Omarchy (Arch Linux) rendszerre — Qt Quick és a libmpv
+Videolejátszó Omarchy (Arch Linux) rendszerre — Qt Quick és a libmpv
 render API-ra építve. Natív Wayland, erős hardveres dekódolás (mpv/NVDEC),
-magyar felület.
+részben magyar felület (a fordítás folyamatban).
 
 ## Funkciók
 
 - mpv motor (`libmpv` render API + property/command API) — széles
   kodek-, hálózati és eszköz-támogatás
-- Magyar nyelvű felület: lejátszás/szünet, kereső sáv előnézeti
-  buborékkal, hangerő-csúszka, idő megjelenítés
+- Részben magyar felület: a gombok és a fő vezérlőszövegek magyarra
+  fordítva (`translations/hu.ts`, minden meglévő `qsTr()` lefedve); a
+  még le nem fordított részek angolul jelennek meg
 - Picture-in-Picture: `--pip` kapcsolóval automatikusan is (vagy gombbal /
   `P` billentyűvel), átméretezhető ablak, a videóra kattintva kilép
 - Teljes képernyős mód
