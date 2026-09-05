@@ -45,7 +45,8 @@ target_link_libraries(omaplayer PRIVATE
 # --- Hungarian translation (pre-compiled .qm shipped in-tree) ---
 qt_add_resources(omaplayer "translations"
     PREFIX "/translations"
-    FILES translations/hu.qm
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/translations"
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/translations/hu.qm"
 )
 
 install(TARGETS omaplayer RUNTIME DESTINATION bin)
