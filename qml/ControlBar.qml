@@ -79,15 +79,6 @@ Item {
         border.width: 1
     }
 
-    // Glass top sheen — a hairline of light along the upper edge.
-    Rectangle {
-        anchors.left: pill.left
-        anchors.right: pill.right
-        anchors.top: pill.top
-        height: 1
-        color: "#4affffff"
-    }
-
     // Soft drop shadow that lifts the pill off the video.
     MultiEffect {
         anchors.fill: pill
@@ -126,11 +117,13 @@ Item {
 
             Row {
                 anchors.left: parent.left
+                anchors.leftMargin: 2
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 2
 
                 IconButton {
                     id: volBtn
+                    visible: pill.width >= 484
                     implicitWidth: 34
                     implicitHeight: 34
                     glyph: bar.volumeGlyph(mpv.volume, mpv.muted)
@@ -145,7 +138,7 @@ Item {
 
                 Slider {
                     id: volSlider
-                    visible: pill.width >= 316
+                    visible: pill.width >= 484
                     width: 92
                     height: 40
                     from: 0
@@ -189,10 +182,16 @@ Item {
                         Behavior on color { ColorAnimation { duration: 110 } }
                     }
                 }
+            }
+
+            Row {
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 8
 
                 IconButton {
-                    id: rewindBtn
-                    visible: pill.width >= 316
+                    id: prevBtn
+                    visible: pill.width >= 324
                     glyph: "\uF048"                                 // FA backward-step
                     tip: qsTr("Előző (P)")
                     onClicked: {
@@ -216,18 +215,8 @@ Item {
                 }
 
                 IconButton {
-                    id: stopBtn
-                    glyph: "\uF04D"                                 // FA stop
-                    tip: qsTr("Leállítás")
-                    onClicked: {
-                        mpv.stop()
-                        bar.flash("\uF04D", qsTr("Leállítva"))
-                    }
-                }
-
-                IconButton {
-                    id: forwardBtn
-                    visible: pill.width >= 316
+                    id: nextBtn
+                    visible: pill.width >= 324
                     glyph: "\uF051"                                 // FA forward-step
                     tip: qsTr("Következő (N)")
                     onClicked: {
@@ -242,7 +231,6 @@ Item {
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 2
 
-                // Playlist (three lines) + settings gear live at the right edge.
                 IconButton {
                     id: menuBtn
                     implicitWidth: 34
@@ -268,7 +256,6 @@ Item {
                 }
             }
         }
-
         // --- scrubber: timeline with elapsed time at the left end and total
         // duration at the right end; draggable to seek in the media ---------
         Row {
