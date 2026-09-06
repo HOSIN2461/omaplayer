@@ -33,6 +33,13 @@ int main(int argc, char *argv[])
     // appear (intrinsic GTK chooser construction) — accepted.
     qputenv("QT_QPA_PLATFORMTHEME", "gtk3");
 
+    // fcitx5's QT_IM_MODULE=fcitx forces Qt TextFields into the DBus input
+    // method plugin, which silently swallows the compositor's native keyboard
+    // on Wayland (text never reaches the field). Unset it so Qt uses the
+    // compositor's text-input protocol instead; the latin/qwertz layout is
+    // handled perfectly by the shell.
+    qunsetenv("QT_IM_MODULE");
+
     QApplication app(argc, argv);
     // The player is a single floating window (the PiP window-set toggle was
     // removed), so the default "quit when the (last) window closes" applies —

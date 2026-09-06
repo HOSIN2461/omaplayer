@@ -93,7 +93,7 @@ Item {
 
     MouseArea {
         id: barArea
-        anchors.fill: pill
+        anchors.fill: parent
         hoverEnabled: true
         acceptedButtons: Qt.NoButton
     }

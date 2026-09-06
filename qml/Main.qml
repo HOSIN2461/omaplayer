@@ -21,10 +21,6 @@ ApplicationWindow {
     property int pipW: 360
     property int pipH: 203
 
-    Component.onCompleted: {
-        // --pip is accepted for backwards compatibility; the player is now
-        // always a compact floating window (float + pin via Hyprland rule).
-    }
 
     title: mpv.mediaTitle.length > 0 ? mpv.mediaTitle : qsTr("Omaplayer")
 
@@ -63,7 +59,8 @@ ApplicationWindow {
         running: mpv.playing && bar.exposed
         repeat: true
         onTriggered: {
-            if (!bar.anywhereHovered && !bar.dragActive)
+            if (!bar.anywhereHovered && !bar.dragActive
+                    && !settingsMenu.visible && !playlistPanel.visible)
                 bar.hide()
         }
     }
@@ -1452,6 +1449,8 @@ ApplicationWindow {
     Component {
         id: settingsContent
         Item {
+        property MpvCore mpv: menu.coreMpv
+        property QtObject menu: parent ? parent.parent : null
     Rectangle {
         anchors.fill: parent
         radius: 12
@@ -1488,7 +1487,7 @@ ApplicationWindow {
                 implicitHeight: 26
                 glyph: "\uF00D"                               // FA xmark
                 tip: qsTr("Bezárás (Esc)")
-                onClicked: settingsMenu.close()
+                onClicked: menu.close()
             }
         }
 
@@ -1508,8 +1507,8 @@ ApplicationWindow {
                     required property string modelData
                     height: 26
                     radius: 6
-                    width: settingsMenu.width / 3 - 4
-                    color: (settingsMenu.tabIndex === index)
+                    width: menu.width / 3 - 4
+                    color: (menu.tabIndex === index)
                            ? Colors.accent : (tabHover.containsMouse ? Colors.hover : "transparent")
                     Behavior on color { ColorAnimation { duration: 90 } }
                     Text {
@@ -1517,13 +1516,13 @@ ApplicationWindow {
                         text: modelData
                         font.pixelSize: 12
                         font.weight: Font.DemiBold
-                        color: (settingsMenu.tabIndex === index) ? "#0b0b0e" : Colors.textDim
+                        color: (menu.tabIndex === index) ? "#0b0b0e" : Colors.textDim
                     }
                     MouseArea {
                         id: tabHover
                         anchors.fill: parent
                         hoverEnabled: true
-                        onClicked: settingsMenu.tabIndex = index
+                        onClicked: menu.tabIndex = index
                     }
                 }
             }
@@ -1532,7 +1531,7 @@ ApplicationWindow {
         // --- video tab -----------------------------------------------
         Flickable {
             id: videoScroll
-            visible: settingsMenu.tabIndex === 0
+            visible: menu.tabIndex === 0
             width: parent.width
             height: parent.height - 72
             clip: true
@@ -1564,7 +1563,7 @@ ApplicationWindow {
                         { label: "21:9", value: "21:9" },
                         { label: "5:4", value: "5:4" }
                     ]
-                    segCurrent: mpv.videoAspect
+                    segCurrent: mpv.videoAspect === "" ? "no" : mpv.videoAspect
                     onPick: v => mpv.setVideoAspect(v)
                 }
 
@@ -1572,7 +1571,7 @@ ApplicationWindow {
                 SegmentRow {
                     width: parent.width
                     segItems: [
-                        { label: qsTr("Nincs"), value: "" },
+                        { label: qsTr("Alap"), value: "" },
                         { label: "4:3", value: "4:3" },
                         { label: "16:9", value: "16:9" },
                         { label: "16:10", value: "16:10" },
@@ -1580,25 +1579,26 @@ ApplicationWindow {
                         { label: "5:4", value: "5:4" },
                         { label: qsTr("Egyéni"), value: "custom" }
                     ]
-                    segCurrent: settingsMenu.cropAspect
-                    onPick: v => settingsMenu.pickCrop(v)
+                    segCurrent: menu.cropAspect
+                    onPick: v => menu.pickCrop(v)
                 }
 
                 Row {
-                    visible: settingsMenu.customCropOpen
+                    visible: menu.customCropOpen
                     width: parent.width
                     spacing: 6
 
                     TextField {
                         id: cropWField
-                        Layout.preferredWidth: 90
+                        width: 90
                         placeholderText: qsTr("Szélesség")
                         placeholderTextColor: Colors.textDim
                         color: Colors.overlayText
                         font.pixelSize: 12
                         topPadding: 6
                         bottomPadding: 6
-                        inputMask: "999999"
+                        validator: IntValidator { bottom: 1; top: 999999 }
+                        onActiveFocusChanged: if (activeFocus) Qt.inputMethod.reset()
                         background: Rectangle {
                             radius: 7
                             color: Colors.chrome
@@ -1607,14 +1607,21 @@ ApplicationWindow {
                     }
                     TextField {
                         id: cropHField
-                        Layout.preferredWidth: 90
+                        width: 90
                         placeholderText: qsTr("Magasság")
                         placeholderTextColor: Colors.textDim
                         color: Colors.overlayText
                         font.pixelSize: 12
                         topPadding: 6
                         bottomPadding: 6
-                        inputMask: "999999"
+                        // No inputMask: its blank fill ("     ") puts the cursor
+                        // past the last slot, so typing is rejected until a
+                        // backspace — annoying. Validator keeps digits only.
+                        validator: IntValidator { bottom: 1; top: 999999 }
+                        // The compositor's text-input context must rebind to the
+                        // newly focused editor, otherwise commits keep targeting
+                        // the previous field (mask-full W rejects them).
+                        onActiveFocusChanged: if (activeFocus) Qt.inputMethod.reset()
                         background: Rectangle {
                             radius: 7
                             color: Colors.chrome
@@ -1624,8 +1631,8 @@ ApplicationWindow {
                     Item { width: parent.width }
                     Rectangle {
                         id: customCropBtn
-                        Layout.preferredWidth: 76
-                        Layout.preferredHeight: 28
+                        width: 76
+                        height: 28
                         radius: 14
                         color: customCropHover.containsMouse || customCropHover.pressed
                                ? Colors.accent : Colors.accent
@@ -1645,10 +1652,21 @@ ApplicationWindow {
                                 const h = parseInt(cropHField.text, 10)
                                 if (w > 0 && h > 0) {
                                     mpv.setCustomVideoCrop(w, h)
-                                    settingsMenu.cropAspect = "custom"
-                                    settingsMenu.customCropOpen = false
+                                    menu.cropAspect = "custom"
+                                    menu.customCropOpen = false
                                 }
                             }
+                        }
+                    }
+                }
+
+                Connections {
+                    target: menu
+                    function onCustomCropOpenChanged() {
+                        if (menu.customCropOpen) {
+                            cropWField.clear()
+                            cropHField.clear()
+                            cropWField.forceActiveFocus()
                         }
                     }
                 }
@@ -1668,35 +1686,45 @@ ApplicationWindow {
 
                 SectionLabel { text: qsTr("Lejátszás") }
                 ValueSlider { vsLabel: qsTr("Sebesség"); vsMin: 25; vsMax: 400; vsStep: 5;
+                width: parent.width
                               vsInteger: true; vsValue: Math.round(mpv.speed * 100);
                               onChanged: v => mpv.speed = v / 100 }
 
                 ToggleRow { trLabel: qsTr("Hardveres dekódolás"); trValue: mpv.hwdecEnabled;
+                width: parent.width
                             onToggled: v => mpv.hwdecEnabled = v }
                 ToggleRow { trLabel: qsTr("Váltott soros szűrő"); trValue: mpv.deinterlaceEnabled;
+                width: parent.width
                             onToggled: v => mpv.deinterlaceEnabled = v }
                 ToggleRow { trLabel: qsTr("HDR"); trValue: mpv.hdrEnabled;
+                width: parent.width
                             onToggled: v => mpv.hdrEnabled = v }
 
                 SectionLabel { text: qsTr("Videó színek") }
                 ValueSlider { vsLabel: qsTr("Fényerő");     vsValue: mpv.brightness;
+                width: parent.width
                               onChanged: v => mpv.brightness = v }
                 ValueSlider { vsLabel: qsTr("Kontraszt");   vsValue: mpv.contrast;
+                width: parent.width
                               onChanged: v => mpv.contrast = v }
                 ValueSlider { vsLabel: qsTr("Telítettség"); vsValue: mpv.saturation;
+                width: parent.width
                               onChanged: v => mpv.saturation = v }
                 ValueSlider { vsLabel: qsTr("Gamma");       vsValue: mpv.gamma;
+                width: parent.width
                               onChanged: v => mpv.gamma = v }
                 ValueSlider { vsLabel: qsTr("Színárnyalat"); vsValue: mpv.hue;
+                width: parent.width
                               onChanged: v => mpv.hue = v }
 
                 RowLayout {
-                    Layout.topMargin: 2
-                    Item { width: parent.width }
+                    width: parent.width
+
+                    Item { Layout.fillWidth: true }
                     Rectangle {
                         id: videoResetBtn
-                        Layout.preferredWidth: 140
-                        Layout.preferredHeight: 28
+                        width: 140
+                        height: 28
                         radius: 14
                         color: videoResetHover.containsMouse ? Colors.hover : "transparent"
                         Text {
@@ -1728,7 +1756,7 @@ ApplicationWindow {
         // --- audio tab -----------------------------------------------
         Flickable {
             id: audioScroll
-            visible: settingsMenu.tabIndex === 1
+            visible: menu.tabIndex === 1
             width: parent.width
             height: parent.height - 72
             clip: true
@@ -1744,25 +1772,26 @@ ApplicationWindow {
                 TrackPicker {
                     id: audioTrackPicker
                     tpLabel: qsTr("Hangsáv")
-                    tpModel: settingsMenu.audioTracks
+                    tpModel: menu.audioTracks
                     tpCurrentId: mpv.currentAudioId
                     onPick: id => {
                         mpv.setAudioTrack(id)
-                        settingsMenu.refreshAudioTracks()
+                        menu.refreshAudioTracks()
                     }
                 }
 
                 RowLayout {
+                    width: parent.width
                     Text {
                         text: qsTr("Külső hang tallózó")
                         color: Colors.overlayText
                         font.pixelSize: 12
-                        width: parent.width
+                        Layout.fillWidth: true
                     }
                     Rectangle {
                         id: pickAudioBtn
-                        Layout.preferredWidth: 88
-                        Layout.preferredHeight: 28
+                        width: 88
+                        height: 28
                         radius: 14
                         color: pickAudioHover.containsMouse ? Colors.hover : "transparent"
                         Text {
@@ -1788,6 +1817,7 @@ ApplicationWindow {
 
                 SectionLabel { text: qsTr("Hangkésleltetés") }
                 ValueSlider { vsLabel: qsTr("Késleltetés"); vsMin: -2000; vsMax: 2000; vsStep: 100;
+                width: parent.width
                               vsInteger: true; vsValue: Math.round(mpv.audioDelay * 1000);
                               onChanged: v => mpv.audioDelay = v / 1000 }
 
@@ -1800,7 +1830,7 @@ ApplicationWindow {
                         height: 26
                         spacing: 8
                         Text {
-                            text: settingsMenu.eqFreqs[index]
+                            text: menu.eqFreqs[index]
                             width: 34
                             color: Colors.textDim
                             font.pixelSize: 11
@@ -1855,12 +1885,13 @@ ApplicationWindow {
                     }
                 }
                 RowLayout {
-                    Layout.topMargin: 2
-                    Item { width: parent.width }
+                    width: parent.width
+
+                    Item { Layout.fillWidth: true }
                     Rectangle {
                         id: eqResetBtn
-                        Layout.preferredWidth: 120
-                        Layout.preferredHeight: 28
+                        width: 120
+                        height: 28
                         radius: 14
                         color: eqResetHover.containsMouse ? Colors.hover : "transparent"
                         Text {
@@ -1885,7 +1916,7 @@ ApplicationWindow {
         // --- subtitle tab --------------------------------------------
         Flickable {
             id: subScroll
-            visible: settingsMenu.tabIndex === 2
+            visible: menu.tabIndex === 2
             width: parent.width
             height: parent.height - 72
             clip: true
@@ -1898,26 +1929,28 @@ ApplicationWindow {
                 spacing: 8
 
                 ToggleRow { trLabel: qsTr("Felirat megjelenítése"); trValue: mpv.subtitlesVisible;
+                width: parent.width
                             onToggled: v => mpv.toggleSubtitles() }
 
                 SectionLabel { text: qsTr("Felirat") }
                 TrackPicker {
                     id: subTrackPicker
                     tpLabel: qsTr("Felirat")
-                    tpModel: settingsMenu.subTracks
+                    tpModel: menu.subTracks
                     tpCurrentId: mpv.currentSubtitleId
                     onPick: id => {
                         mpv.setSubtitleTrack(id)
-                        settingsMenu.refreshSubTracks()
+                        menu.refreshSubTracks()
                     }
                 }
 
                 RowLayout {
+                    width: parent.width
                     Text {
                         text: qsTr("Külső felirat tallózó")
                         color: Colors.overlayText
                         font.pixelSize: 12
-                        width: parent.width
+                        Layout.fillWidth: true
                     }
                     Rectangle {
                         id: pickSubBtn
@@ -1942,26 +1975,31 @@ ApplicationWindow {
 
                 SectionLabel { text: qsTr("Időzítés és elhelyezés") }
                 ValueSlider { vsLabel: qsTr("Késleltetés"); vsMin: -2000; vsMax: 2000; vsStep: 100;
+                width: parent.width
                               vsInteger: true; vsValue: Math.round(mpv.subDelay * 1000);
                               onChanged: v => mpv.subDelay = v / 1000 }
                 ValueSlider { vsLabel: qsTr("Pozíció"); vsMin: 30; vsMax: 150; vsStep: 1;
+                width: parent.width
                               vsInteger: true; vsValue: Math.round(mpv.subPos);
                               onChanged: v => mpv.subPos = v }
                 ValueSlider { vsLabel: qsTr("Nagyítás"); vsMin: 50; vsMax: 200; vsStep: 5;
+                width: parent.width
                               vsInteger: true; vsValue: Math.round(mpv.subScale * 100);
                               onChanged: v => mpv.subScale = v / 100 }
 
                 SectionLabel { text: qsTr("Szöveg stílus") }
                 ValueSlider { vsLabel: qsTr("Betűméret"); vsMin: 25; vsMax: 200; vsStep: 1;
+                width: parent.width
                               vsInteger: true; vsValue: Math.round(mpv.subFontSize);
                               onChanged: v => mpv.subFontSize = v }
 
                 RowLayout {
+                    width: parent.width
                     Text {
                         text: qsTr("Betűtípus")
                         color: Colors.overlayText
                         font.pixelSize: 12
-                        width: parent.width
+                        Layout.fillWidth: true
                     }
                     TextField {
                         id: fontField
@@ -2009,6 +2047,7 @@ ApplicationWindow {
 
                 SectionLabel { text: qsTr("Keret") }
                 ValueSlider { vsLabel: qsTr("Szélesség"); vsMin: 0; vsMax: 10; vsStep: 1;
+                width: parent.width
                               vsInteger: true; vsValue: Math.round(mpv.subBorderSize);
                               onChanged: v => mpv.subBorderSize = v }
                 ColorSwatches {
@@ -2025,8 +2064,9 @@ ApplicationWindow {
                 }
 
                 RowLayout {
+                    width: parent.width
 
-                    Item { width: parent.width - 132 }
+                    Item { Layout.fillWidth: true }
                     Rectangle {
                         id: subResetBtn
                         width: 120
@@ -2079,6 +2119,7 @@ ApplicationWindow {
         // Plain in-window panel — see playlistPanel: no native popup surface,
         // keyboard focus (and G/L/Esc) stay on the main window.
 
+        property MpvCore coreMpv: root.mpv
         property int tabIndex: 0
         property string cropAspect: ""
         property bool customCropOpen: false
