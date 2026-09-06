@@ -8,6 +8,7 @@
 #include <QLibraryInfo>
 #include <QTranslator>
 #include <QDir>
+#include "Updater.h"
 #include <clocale>
 
 #include "MpvCore.h"
@@ -17,8 +18,6 @@ using namespace Qt::Literals::StringLiterals;
 
 int main(int argc, char *argv[])
 {
-    fprintf(stderr, "BOOT-START\n");
-    fflush(stderr);
     // NVIDIA driver 580.178.04 segfaults (SIGSEGV in libnvidia-eglcore during
     // QRhi::endFrame) when Qt Quick presents over the setup the in-code
     // setGraphicsApi() below selects; the QSG_RHI_BACKEND environment variable
@@ -35,21 +34,17 @@ int main(int argc, char *argv[])
     qputenv("QT_QPA_PLATFORMTHEME", "gtk3");
 
     QApplication app(argc, argv);
-    fprintf(stderr, "BOOT app-ctor done\n");
-    fflush(stderr);
     // The player is a single floating window (the PiP window-set toggle was
     // removed), so the default "quit when the (last) window closes" applies —
     // closing the window stops playback and exits the app (the tray menu's
     // "Kilépés" quits explicitly while hidden in the tray).
-    fprintf(stderr, "BOOT app-ctor done\n");
-    fflush(stderr);
     // libmpv refuses to create a handle while LC_NUMERIC is non-C (it would
     // misparse decimals). Qt resets the locale from the environment, so force
     // the C numeric locale back after QApplication was constructed.
     std::setlocale(LC_NUMERIC, "C");
     QCoreApplication::setApplicationName(QStringLiteral("omaplayer"));
     QCoreApplication::setOrganizationName(QStringLiteral("omarchy"));
-    QCoreApplication::setApplicationVersion(QStringLiteral("0.1.2"));
+    QCoreApplication::setApplicationVersion(QStringLiteral("0.1.3"));
 
     // Qt Quick must render through OpenGL for the libmpv OpenGL render API.
     QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
@@ -92,6 +87,11 @@ int main(int argc, char *argv[])
     }
 
     QQmlApplicationEngine engine;
+    // Self-update against GitHub Releases; the QML UI drives it via the
+    // context property (check -> download -> install).
+    auto *updateCore = new Updater(&app);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("updater"), updateCore);
     QObject::connect(
         &engine, &QQmlApplicationEngine::objectCreationFailed,
         &app, [] { qWarning() << "MAIN: objectCreationFailed"; QCoreApplication::exit(-1); },
@@ -102,8 +102,6 @@ int main(int argc, char *argv[])
                              qWarning().noquote() << e.toString();
                      });
     engine.loadFromModule(QStringLiteral("Omaplayer"), QStringLiteral("Main"));
-    fprintf(stderr, "BOOT after loadFromModule, rootObjects=%d\n", int(engine.rootObjects().size()));
-    fflush(stderr);
 
     // Test hook: OMAPLAYER_WIN_W/H lets us launch the floating window at a
     // given size (hyprctl resize is unusable on the Lua config). Overrides the
@@ -115,7 +113,7 @@ int main(int argc, char *argv[])
             win->resize(tw, th);
     }
 
-    // --- MPRIS (org.mpris.MediaPlayer2) over session D-Bus — media keys,
+// --- MPRIS (org.mpris.MediaPlayer2) over session D-Bus — media keys,
     // mixer strips and the desktop shell's media widget drive the player.
     MpvCore::instance(); // ensure the singleton exists before adaptors attach
     {

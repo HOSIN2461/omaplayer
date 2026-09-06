@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.28)
-project(omaplayer VERSION 0.1.2 LANGUAGES CXX)
+project(omaplayer VERSION 0.1.3 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Quick QuickControls2 DBus Widgets)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Quick QuickControls2 DBus Widgets Network)
 find_package(PkgConfig REQUIRED)
 # The libmpv client library (mpv render API + property/command API).
 pkg_check_modules(MPV REQUIRED IMPORTED_TARGET mpv)
@@ -20,6 +20,8 @@ qt_add_executable(omaplayer
     src/MpvVideoItem.h
     src/MprisPlayer.cpp
     src/MprisPlayer.h
+    src/Updater.cpp
+    src/Updater.h
 )
 
 set_source_files_properties(qml/Colors.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
@@ -42,6 +44,7 @@ target_link_libraries(omaplayer PRIVATE
     Qt6::Quick
     Qt6::QuickControls2
     Qt6::Widgets
+    Qt6::Network
     Qt6::DBus
     PkgConfig::MPV
 )

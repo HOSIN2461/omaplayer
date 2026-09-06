@@ -25,6 +25,9 @@ magyar felülettel.
   StatusNotifier-alapú tálcaikonra kerül; kattintás visszahozza, jobb-gombos
   menüjében lejátszás/szünet, előző/következő és kilépés). Ha nincs tálca
   (nincs StatusNotifier-host), minimalizálásra esik vissza
+- **Beépített frissítész**: „Frissítések keresése" menüpont a GitHub
+  Releases-től ellenőrzi az új verziót; gombra letölti a csomagot és
+  `sudo pacman`-nal feltelepíti
 - **Képernyőkép** `Ctrl+S`-re
 - `yt-dlp` telepítése esetén webes források (YouTube stb.) is lejátszhatók
 

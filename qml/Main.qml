@@ -83,6 +83,7 @@ ApplicationWindow {
         onClicked: mouse => {
             bar.show()
             if (urlDialog.visible) { urlDialog.close(); return }
+            if (updatePopup.visible) { updatePopup.close(); return }
             if (settingsMenu.visible) { settingsMenu.close(); return }
             if (playlistPanel.visible) { playlistPanel.close(); return }
             if (contextMenu.visible) { contextMenu.close(); return }
@@ -351,11 +352,160 @@ ApplicationWindow {
                     glyph: "\uF2D1"
                     onActivate: () => mpv.hideToTray()
                 }
+                MenuRow {
+                    rowText: qsTr("Frissítések keresése")
+                    glyph: "\uF021"
+                    onActivate: () => { updater.checkForUpdates(); updatePopup.open() }
+                }
             }
         }
     }
 
     // --- fullscreen / window state --------------------------------------------
+    Item {
+        id: updatePopup
+        width: 320
+        visible: false
+        z: 60
+
+        readonly property real bodyH: updateCol.implicitHeight + 28
+
+        function open() {
+            visible = true
+        }
+        function close() { visible = false }
+
+        x: (root.width - width) / 2
+        y: Math.max(8, root.height - bodyH - 14)
+        height: bodyH
+
+        Rectangle {
+            anchors.fill: parent
+            radius: 14
+            color: Colors.overlay
+            border.color: Colors.border
+            border.width: 1
+        }
+
+        Column {
+            id: updateCol
+            anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12 }
+            spacing: 8
+
+            Text {
+                text: qsTr("Frissítések")
+                font.pixelSize: 15
+                font.weight: Font.DemiBold
+                color: Colors.overlayText
+            }
+
+            Text {
+                text: updater.status
+                width: parent.width
+                wrapMode: Text.Wrap
+                font.pixelSize: 13
+                color: Colors.textDim
+            }
+
+            Text {
+                visible: updater.updateAvailable
+                font.pixelSize: 13
+                color: Colors.overlayText
+                text: updater.latestVersion.length > 0 ? qsTr("Új verzió: %1 (jelenlegi: %2)").arg(updater.latestVersion).arg(Qt.application.version) : ""
+            }
+
+            Row {
+                visible: updater.updateAvailable && !updater.downloaded && !updater.busy
+                spacing: 8
+
+                Rectangle {
+                    width: 110
+                    height: 32
+                    radius: 16
+                    color: dlMouse.containsMouse || dlMouse.pressed ? Colors.accentGlow : Colors.accent
+                    Behavior on color { ColorAnimation { duration: 110 } }
+                    Text {
+                        anchors.centerIn: parent
+                        text: qsTr("Letöltés")
+                        font.pixelSize: 13
+                        font.weight: Font.DemiBold
+                        color: "#0b0b0e"
+                    }
+                    MouseArea {
+                        id: dlMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: updater.downloadPackage()
+                    }
+                }
+
+                Rectangle {
+                    width: 88
+                    height: 32
+                    radius: 16
+                    color: updCloseMouse.containsMouse ? Colors.hover : "transparent"
+                    Text {
+                        anchors.centerIn: parent
+                        text: qsTr("Bezárás")
+                        font.pixelSize: 13
+                        color: updCloseMouse.containsMouse ? Colors.overlayText : Colors.textDim
+                    }
+                    MouseArea {
+                        id: updCloseMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: updatePopup.close()
+                    }
+                }
+            }
+
+            Row {
+                visible: updater.updateAvailable && updater.downloaded && !updater.busy
+                spacing: 8
+
+                Rectangle {
+                    width: 110
+                    height: 32
+                    radius: 16
+                    color: instMouse.containsMouse || instMouse.pressed ? Colors.accentGlow : Colors.accent
+                    Behavior on color { ColorAnimation { duration: 110 } }
+                    Text {
+                        anchors.centerIn: parent
+                        text: qsTr("Telepítés (sudo)")
+                        font.pixelSize: 13
+                        font.weight: Font.DemiBold
+                        color: "#0b0b0e"
+                    }
+                    MouseArea {
+                        id: instMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: updater.installPackage()
+                    }
+                }
+
+                Rectangle {
+                    width: 88
+                    height: 32
+                    radius: 16
+                    color: instCloseMouse2.containsMouse ? Colors.hover : "transparent"
+                    Text {
+                        anchors.centerIn: parent
+                        text: qsTr("Bezárás")
+                        font.pixelSize: 13
+                        color: instCloseMouse2.containsMouse ? Colors.overlayText : Colors.textDim
+                    }
+                    MouseArea {
+                        id: instCloseMouse2
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: updatePopup.close()
+                    }
+                }
+            }
+        }
+    }
+
     property bool isFullScreen: false
     // Both side drawers share one width so they swap size-for-size.
     readonly property real drawerWidth: Math.max(240, Math.min(380, Math.round(root.width * 0.62)))
@@ -1139,6 +1289,7 @@ ApplicationWindow {
         if (settingsMenu.visible) { settingsMenu.close(); return }
         if (playlistPanel.visible) { playlistPanel.close(); return }
         if (urlDialog.visible) { urlDialog.close(); return }
+        if (updatePopup.visible) { updatePopup.close(); return }
         if (root.isFullScreen) { root.isFullScreen = false; mpv.windowFullscreen(false) }
     } }
     Shortcut { sequence: "Ctrl+0"; onActivated: mpv.setVolume(100) }
