@@ -723,6 +723,16 @@ ApplicationWindow {
         }
     }
 
+    // Surface the background (2s) auto-check: open the popup right away so
+    // the download/install chain is visible instead of happening silently.
+    Connections {
+        target: updater
+        function onUpdateAvailableChanged() {
+            if (updater.updateAvailable)
+                updatePopup.open()
+        }
+    }
+
     // Intro / recap / credits skip prompt (top center, streaming style).
     Item {
         id: skipBanner

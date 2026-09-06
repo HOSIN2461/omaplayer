@@ -223,8 +223,12 @@ void Updater::installPackage()
     const QString srcShare = usrDir + QStringLiteral("/share");
     auto copyTree = [](const QString &src, const QString &dest) {
         QDir().mkpath(dest);
+        // Skip the existing destination files before copying: the updater
+        // replaces its own (currently running) binary, and a plain `cp -a`
+        // hits ETXTBSY ("Text file busy") when the target is executing.
         return QProcess::execute(QStringLiteral("cp"),
                                  { QStringLiteral("-a"),
+                                   QStringLiteral("--remove-destination"),
                                    src + QStringLiteral("/."),
                                    dest + QStringLiteral("/") });
     };
