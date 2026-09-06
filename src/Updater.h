@@ -8,9 +8,10 @@ class QProcess;
 
 // Self-update against the GitHub Releases feed (API). One upload-only
 // dependency: the .pkg.tar.zst attached to the newest release. Install is
-// delegated to `sudo pacman -U` inside a spawned foot terminal — pacman
-// upgrades need root, and the session has no polkit agent for pkexec, so a
-// visible terminal lets the user enter the password once.
+// to the user's own ~/.local tree (no root/sudo): the package is extracted
+// to a staging dir, merged into ~/.local/bin and ~/.local/share, the
+// desktop entry is pointed at the user-local binary, and the app relaunches
+// itself from ~/.local/bin/omaplayer.
 class Updater : public QObject
 {
     Q_OBJECT
@@ -47,7 +48,6 @@ private:
     void setStatus(const QString &status);
 
     QNetworkAccessManager *m_nam;
-    QProcess *m_installProc = nullptr;
     QProcess *m_checkProc = nullptr;
 
     QString m_status;

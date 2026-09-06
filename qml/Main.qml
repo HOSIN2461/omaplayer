@@ -471,7 +471,7 @@ ApplicationWindow {
                     Behavior on color { ColorAnimation { duration: 110 } }
                     Text {
                         anchors.centerIn: parent
-                        text: qsTr("Telepítés (sudo)")
+                        text: qsTr("Telepítés")
                         font.pixelSize: 13
                         font.weight: Font.DemiBold
                         color: "#0b0b0e"

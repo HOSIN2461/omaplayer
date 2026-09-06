@@ -26,11 +26,11 @@ magyar felülettel.
   menüjében lejátszás/szünet, előző/következő és kilépés). Ha nincs tálca
   (nincs StatusNotifier-host), minimalizálásra esik vissza
 - **Beépített frissítész**: „Frissítések keresése" menüpont a GitHub
-  Releases-től ellenőrzi az új verziót; gombra letölti a csomagot és
-  `sudo pacman`-nal feltelepíti, majd **automatikusan újraindul** a friss
-  verzióval (a letöltés helyét `~/.cache/omarchy/omaplayer/`-ban tartja).
-  Előbb `sudo -n`-t próbál: ha be van állítva NOPASSWD-sudoerre a
-  pacman-parancsra, az egész frissítés jelszó nélkül, csendben lefut
+  Releases-től ellenőrzi az új verziót; gombra letölti és **sudo nélkül,
+  csendben** feltelepíti a `~/.local`-ba (bináris a `~/.local/bin`,
+  asztali belépő és ikon a `~/.local/share` alá), majd **automatikusan
+  újraindul** a friss verzióval, és a lejátszott fájl is folytatódik.
+  A letöltést `~/.cache/omarchy/omaplayer/`-ban tartja
 - **Intro / recap / kreditek kihagyása**: a fájl fejezetcímei (Intro, OP,
   Opening, Recap, Credits, ED, stáblista stb.) alapján a bevezető/
   visszatekintés/stáblista-szakaszban kihagyás-gomb jelenik meg felül

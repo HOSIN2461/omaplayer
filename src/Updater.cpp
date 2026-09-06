@@ -181,41 +181,87 @@ void Updater::installPackage()
         return;
 
     setBusy(true);
-    setStatus(QStringLiteral("Telepítő ablak megnyitása…"));
+    setStatus(QStringLiteral("Telepítés ~/.local könyvtárba…"));
 
-    m_installProc = new QProcess(this);
-    connect(m_installProc, &QProcess::finished, this, [this](int code) {
-        const bool ok = (m_installProc->exitStatus() == QProcess::NormalExit
-                         && m_installProc->readAllStandardOutput().contains(
-                                QByteArrayLiteral("OMAPLAYER_UPDATE_RC=0")));
-        if (ok) {
-            // Relaunch the (now updated) binary and close this instance, so
-            // the update lands in a fresh process instead of a stale one.
-            QStringList args;
-            const QString curFile = MpvCore::instance()->filePath();
-            if (!curFile.isEmpty())
-                args << curFile;
-            QProcess::startDetached(QCoreApplication::applicationFilePath(),
-                                    args);
-            setStatus(QStringLiteral("Telepítés kész — újraindítás…"));
-            QCoreApplication::exit(0);
-        } else {
-            setStatus(QStringLiteral("Telepítés megszakítva (%1)").arg(code));
-        }
-        m_installProc->deleteLater();
-        m_installProc = nullptr;
+    const QString cacheDir = QStandardPaths::writableLocation(
+        QStandardPaths::CacheLocation);
+    const QString stageDir = cacheDir + QDir::separator()
+        + QStringLiteral("stage-") + m_latestVersion;
+    QDir stage(stageDir);
+    if (stage.exists())
+        stage.removeRecursively();
+    QDir().mkpath(stageDir);
+
+    // Extract the Arch package (structure: usr/bin, usr/share/...).
+    const int rc = QProcess::execute(
+        QStringLiteral("tar"),
+        { QStringLiteral("--zstd"), QStringLiteral("-xf"), m_downloadPath,
+          QStringLiteral("-C"), stageDir });
+    if (rc != 0) {
+        setStatus(QStringLiteral("Kicsomagolás nem sikerült (%1)").arg(rc));
         setBusy(false);
-    });
+        return;
+    }
 
-    // Prefer a passwordless sudo (NOPASSWD) so the whole update is silent;
-    // otherwise fall back to the interactive sudo prompt in the terminal.
-    const QString cmd = QStringLiteral(
-        "sudo -n pacman -U --noconfirm '%1' 2>/dev/null || "
-        "sudo pacman -U --noconfirm '%1'; rc=$?; "
-        "echo \"OMAPLAYER_UPDATE_RC=$rc\"; echo; "
-        "read -p 'Kész — nyomj Entert az ablak bezárásához'")
-        .arg(m_downloadPath);
-    m_installProc->start(QStringLiteral("foot"),
-                         { QStringLiteral("-e"), QStringLiteral("sh"),
-                           QStringLiteral("-lc"), cmd });
+    const QString home = QDir::homePath();
+    const QString localBin = home + QStringLiteral("/.local/bin");
+    const QString localShare = home + QStringLiteral("/.local/share");
+    const QString usrDir = stageDir + QDir::separator() + QStringLiteral("usr");
+
+    // Merge the package into the user's own tree — no root required.
+    const QString srcBin = usrDir + QStringLiteral("/bin");
+    const QString srcShare = usrDir + QStringLiteral("/share");
+    auto copyTree = [](const QString &src, const QString &dest) {
+        QDir().mkpath(dest);
+        return QProcess::execute(QStringLiteral("cp"),
+                                 { QStringLiteral("-a"),
+                                   src + QStringLiteral("/."),
+                                   dest + QStringLiteral("/") });
+    };
+
+    if (!QDir(srcBin).exists()
+        || copyTree(srcBin, localBin) != 0) {
+        setStatus(QStringLiteral("Másolás a ~/.local/bin-be nem sikerült"));
+        setBusy(false);
+        return;
+    }
+    if (copyTree(srcShare, localShare) != 0) {
+        setStatus(QStringLiteral("Másolás a ~/.local/share-be nem sikerült"));
+        setBusy(false);
+        return;
+    }
+
+    // Let the desktop entry always start the user-local binary,
+    // independent of PATH order.
+    const QString desktopFile = localShare
+        + QStringLiteral("/applications/omaplayer.desktop");
+    if (QFile::exists(desktopFile)) {
+        QFile f(desktopFile);
+        if (f.open(QIODevice::ReadOnly)) {
+            QString text = QString::fromUtf8(f.readAll());
+            f.close();
+            text.replace(QStringLiteral("Exec=omaplayer"),
+                         QStringLiteral("Exec=") + localBin
+                             + QStringLiteral("/omaplayer"));
+            if (f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+                f.write(text.toUtf8());
+            f.close();
+        }
+    }
+
+    // Version stamp so the updater knows what is deployed.
+    QDir(localShare + QStringLiteral("/omaplayer")).mkpath(QStringLiteral("."));
+    QFile stamp(localShare + QStringLiteral("/omaplayer/VERSION"));
+    if (stamp.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        stamp.write(m_latestVersion.toUtf8());
+
+    // Relaunch the freshly deployed binary (resuming the current file) and
+    // close this instance.
+    QStringList args;
+    const QString curFile = MpvCore::instance()->filePath();
+    if (!curFile.isEmpty())
+        args << curFile;
+    QProcess::startDetached(localBin + QStringLiteral("/omaplayer"), args);
+    setStatus(QStringLiteral("Feltelepítve — újraindítás…"));
+    QCoreApplication::exit(0);
 }
