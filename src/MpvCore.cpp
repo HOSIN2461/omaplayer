@@ -79,9 +79,10 @@ MpvCore::MpvCore(QObject *parent)
     mpv_set_option_string(m_handle, "osc", "no");       // we draw our own bar
     mpv_set_option_string(m_handle, "keep-open", "yes"); // stay for a last-frame
     mpv_set_option_string(m_handle, "screenshot-directory", "~/Pictures");
+mpv_observe_property(m_handle, 0, "pause", MPV_FORMAT_FLAG);
 
-    mpv_observe_property(m_handle, 0, "pause", MPV_FORMAT_FLAG);
     mpv_observe_property(m_handle, 0, "time-pos", MPV_FORMAT_DOUBLE);
+    mpv_observe_property(m_handle, 0, "chapter-list", MPV_FORMAT_NODE);
     mpv_observe_property(m_handle, 0, "duration", MPV_FORMAT_DOUBLE);
     mpv_observe_property(m_handle, 0, "volume", MPV_FORMAT_DOUBLE);
     mpv_observe_property(m_handle, 0, "mute", MPV_FORMAT_FLAG);
@@ -99,6 +100,11 @@ MpvCore::MpvCore(QObject *parent)
 
     mpv_set_wakeup_callback(m_handle, &MpvCore::wakeupCallback, this);
     mpv_request_log_messages(m_handle, "warn");
+
+    m_skipTimer = new QTimer(this);
+    m_skipTimer->setSingleShot(true);
+    m_skipTimer->setInterval(8000);
+    connect(m_skipTimer, &QTimer::timeout, this, [this] { dismissSkipPrompt(); });
 
     if (mpv_initialize(m_handle) < 0) {
         qWarning("mpv_initialize failed");
@@ -282,11 +288,15 @@ void MpvCore::handleWakeup()
                 if (value != m_position) {
                     m_position = value;
                     Q_EMIT positionChanged(m_position);
+                    checkSkipPrompt();
                 }
+            } else if (prop->format == MPV_FORMAT_NODE && std::strcmp(name, "chapter-list") == 0) {
+                recomputeSkipRanges(static_cast<mpv_node *>(prop->data));
             } else if (prop->format == MPV_FORMAT_DOUBLE && std::strcmp(name, "duration") == 0) {
                 if (value != m_duration) {
                     m_duration = value;
                     Q_EMIT durationChanged(m_duration);
+                    rebuildSkipRanges(); // last chapter's end becomes known
                 }
             } else if (prop->format == MPV_FORMAT_DOUBLE && std::strcmp(name, "volume") == 0) {
                 if (value != m_volume) {
@@ -450,6 +460,171 @@ void MpvCore::seekRelative(double seconds)
     const QByteArray sec = QByteArray::number(seconds);
     const char *cmd[] = { "seek", sec.constData(), "relative", nullptr };
     mpv_command(m_handle, cmd);
+}
+
+// --- Intro / recap / credits skipping -------------------------------
+
+void MpvCore::recomputeSkipRanges(const mpv_node *list)
+{
+    m_rawChapters.clear();
+    if (list && list->format == MPV_FORMAT_NODE_ARRAY) {
+        for (int i = 0; i < list->u.list->num; ++i) {
+            const mpv_node &entry = list->u.list->values[i];
+            if (entry.format != MPV_FORMAT_NODE_MAP)
+                continue;
+            double time = 0.0;
+            QString title;
+            for (int j = 0; j < entry.u.list->num; ++j) {
+                const char *key = entry.u.list->keys[j];
+                const mpv_node &v = entry.u.list->values[j];
+                if (std::strcmp(key, "time") == 0 && v.format == MPV_FORMAT_DOUBLE)
+                    time = v.u.double_;
+                else if (std::strcmp(key, "title") == 0
+                         && v.format == MPV_FORMAT_STRING)
+                    title = QString::fromUtf8(v.u.string);
+            }
+            m_rawChapters.append({ time, title });
+        }
+    }
+    rebuildSkipRanges();
+}
+
+void MpvCore::rebuildSkipRanges()
+{
+    m_skipRanges.clear();
+    setSkipPromptVisible(false);
+    m_skipTimer->stop();
+    const int n = m_rawChapters.size();
+    if (n == 0)
+        return;
+    const double total = m_duration;
+    for (int i = 0; i < n; ++i) {
+        const double start = m_rawChapters.at(i).first;
+        // mpv reports only the chapter start ("time"); the duration ends at
+        // the next chapter, or the file duration for the last one.
+        const double next = i + 1 < n ? m_rawChapters.at(i + 1).first : total;
+        if (total <= 0.0 && i + 1 == n)
+            continue; // last chapter's end is unknown yet
+        const double end = next;
+        if (end <= start + 0.5)
+            continue;
+        SkipType type;
+        if (!classifyChapter(m_rawChapters.at(i).second, type))
+            continue;
+        const double len = end - start;
+        if (len < 5.0 || len > (type == SkipType::Credits ? 600.0 : 360.0))
+            continue;
+        // Intro/recap only makes sense early on; credits only near the end.
+        if (type == SkipType::Intro || type == SkipType::Recap) {
+            if (total > 0.0 && start > total * 0.25)
+                continue;
+        } else if (total > 0.0 && end < total * 0.75) {
+            continue;
+        }
+        m_skipRanges.append({ start, end, type, false });
+    }
+}
+
+bool MpvCore::classifyChapter(const QString &title, SkipType &type) const
+{
+    const QStringList words = title.toLower()
+                                  .split(QRegularExpression("\\W+"),
+                                         Qt::SkipEmptyParts);
+    for (const QString &w : words) {
+        if (w == "intro" || w == "opening" || w == "preface"
+            || w == "bevezetés" || w == "bevezető"
+            || (w.startsWith("op") && w.length() <= 4)) {
+            type = SkipType::Intro;
+            return true;
+        }
+        if (w == "recap" || w == "recaps" || w == "previously"
+            || w == "visszatekintés" || w == "visszatekintő") {
+            type = SkipType::Recap;
+            return true;
+        }
+        if (w == "credits" || w == "credit" || w == "ending" || w == "outro"
+            || w == "stáblista" || (w.startsWith("ed") && w.length() <= 4)) {
+            type = SkipType::Credits;
+            return true;
+        }
+    }
+    return false;
+}
+
+void MpvCore::checkSkipPrompt()
+{
+    if (m_skipRanges.isEmpty())
+        return;
+    for (int i = 0; i < m_skipRanges.size(); ++i) {
+        const SkipRange &r = m_skipRanges.at(i);
+        if (r.prompted || m_position < r.start || m_position >= r.end)
+            continue;
+        m_skipRanges[i].prompted = true;
+        m_skipPromptRange = i;
+        if (m_autoSkip) {
+            skipRange(i);
+            return;
+        }
+        m_skipPromptLabel = promptLabel(r.type);
+        setSkipPromptVisible(true);
+        Q_EMIT skipPromptChanged();
+        m_skipTimer->start();
+        return;
+    }
+}
+
+void MpvCore::skipRange(int index)
+{
+    if (!m_handle || index < 0 || index >= m_skipRanges.size())
+        return;
+    const QByteArray sec = QByteArray::number(m_skipRanges.at(index).end);
+    const char *cmd[] = { "seek", sec.constData(), "absolute", nullptr };
+    mpv_command(m_handle, cmd);
+}
+
+void MpvCore::setSkipPromptVisible(bool visible)
+{
+    if (visible == m_skipPromptVisible)
+        return;
+    m_skipPromptVisible = visible;
+    Q_EMIT skipPromptChanged();
+}
+
+QString MpvCore::promptLabel(SkipType type) const
+{
+    switch (type) {
+    case SkipType::Intro:
+        return tr("Bevezető kihagyása");
+    case SkipType::Recap:
+        return tr("Visszatekintés kihagyása");
+    case SkipType::Credits:
+        return tr("Stáblista kihagyása");
+    }
+    return {};
+}
+
+void MpvCore::skipCurrent()
+{
+    if (m_skipPromptRange >= 0 && m_skipPromptRange < m_skipRanges.size())
+        skipRange(m_skipPromptRange);
+    dismissSkipPrompt();
+}
+
+void MpvCore::dismissSkipPrompt()
+{
+    m_skipTimer->stop();
+    m_skipPromptRange = -1;
+    setSkipPromptVisible(false);
+}
+
+void MpvCore::setAutoSkip(bool on)
+{
+    if (on == m_autoSkip)
+        return;
+    if (on && m_skipPromptVisible)
+        skipCurrent();
+    m_autoSkip = on;
+    Q_EMIT autoSkipChanged(m_autoSkip);
 }
 
 void MpvCore::setVolume(double volume)

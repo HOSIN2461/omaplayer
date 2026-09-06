@@ -28,6 +28,10 @@ magyar felülettel.
 - **Beépített frissítész**: „Frissítések keresése" menüpont a GitHub
   Releases-től ellenőrzi az új verziót; gombra letölti a csomagot és
   `sudo pacman`-nal feltelepíti
+- **Intro / recap / kreditek kihagyása**: a fájl fejezetcímei (Intro, OP,
+  Opening, Recap, Credits, ED, stáblista stb.) alapján a bevezető/
+  visszatekintés/stáblista-szakaszban kihagyás-gomb jelenik meg felül
+  középen, és a találatra a következő fejezetig ugrik
 - **Képernyőkép** `Ctrl+S`-re
 - `yt-dlp` telepítése esetén webes források (YouTube stb.) is lejátszhatók
 

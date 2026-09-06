@@ -3,6 +3,9 @@
 #include <QObject>
 #include <QString>
 #include <QPointer>
+#include <QPair>
+#include <QTimer>
+#include <QVector>
 #include <QtQmlIntegration>
 #include <functional>
 
@@ -41,6 +44,9 @@ class MpvCore : public QObject
     Q_PROPERTY(double gamma READ gamma WRITE setGamma NOTIFY gammaChanged)
     Q_PROPERTY(double subScale READ subScale WRITE setSubScale NOTIFY subScaleChanged)
     Q_PROPERTY(double audioDelay READ audioDelay WRITE setAudioDelay NOTIFY audioDelayChanged)
+    Q_PROPERTY(bool skipPromptVisible READ skipPromptVisible NOTIFY skipPromptChanged)
+    Q_PROPERTY(QString skipPromptLabel READ skipPromptLabel NOTIFY skipPromptChanged)
+    Q_PROPERTY(bool autoSkip READ autoSkip WRITE setAutoSkip NOTIFY autoSkipChanged)
 
 public:
     // The QML side instantiates the type (Main.qml holds one as `mpv`), and the
@@ -67,6 +73,10 @@ public:
     double gamma() const { return m_gamma; }
     double subScale() const { return m_subScale; }
     double audioDelay() const { return m_audioDelay; }
+    bool skipPromptVisible() const { return m_skipPromptVisible; }
+    QString skipPromptLabel() const { return m_skipPromptLabel; }
+    bool autoSkip() const { return m_autoSkip; }
+    void setAutoSkip(bool on);
 
     Q_INVOKABLE void open(const QString &location);
     Q_INVOKABLE void openList(const QStringList &files);
@@ -98,6 +108,8 @@ public:
     Q_INVOKABLE void windowFullscreen(bool on);
     Q_INVOKABLE void takeScreenshot();
     Q_INVOKABLE void toggleSubtitles();
+    Q_INVOKABLE void skipCurrent();
+    Q_INVOKABLE void dismissSkipPrompt();
     void setSpeed(double speed);
     void setBrightness(double value);
     void setContrast(double value);
@@ -119,6 +131,28 @@ private:
     void setupTray();
     void restoreFromTray();
 
+    enum class SkipType { Intro, Recap, Credits };
+    struct SkipRange {
+        double start = 0.0;
+        double end = 0.0;
+        SkipType type = SkipType::Intro;
+        bool prompted = false;
+    };
+    void recomputeSkipRanges(const mpv_node *list);
+    void rebuildSkipRanges();
+    bool classifyChapter(const QString &title, SkipType &type) const;
+    void checkSkipPrompt();
+    void skipRange(int index);
+    void setSkipPromptVisible(bool visible);
+    QString promptLabel(SkipType type) const;
+    QVector<SkipRange> m_skipRanges;
+    QVector<QPair<double, QString>> m_rawChapters;
+    int m_skipPromptRange = -1;
+    bool m_skipPromptVisible = false;
+    bool m_autoSkip = false;
+    QString m_skipPromptLabel;
+    QTimer *m_skipTimer = nullptr;
+
 signals:
     void playingChanged(bool playing);
     void positionChanged(double position);
@@ -136,6 +170,8 @@ signals:
     void subScaleChanged(double value);
     void audioDelayChanged(double value);
     void currentIndexChanged(int index);
+    void skipPromptChanged();
+    void autoSkipChanged(bool autoSkip);
 
 public:
     static void wakeupCallback(void *context);

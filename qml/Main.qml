@@ -376,7 +376,7 @@ ApplicationWindow {
         function close() { visible = false }
 
         x: (root.width - width) / 2
-        y: Math.max(8, root.height - bodyH - 14)
+        y: 12
         height: bodyH
 
         Rectangle {
@@ -501,6 +501,60 @@ ApplicationWindow {
                         hoverEnabled: true
                         onClicked: updatePopup.close()
                     }
+                }
+            }
+        }
+    }
+
+    // Intro / recap / credits skip prompt (top center, streaming style).
+    Item {
+        id: skipBanner
+        visible: mpv.skipPromptVisible
+        z: 70
+        height: 40
+        width: skipRow.implicitWidth + 20
+        anchors.horizontalCenter: parent.horizontalCenter
+        y: 12
+
+        Rectangle {
+            anchors.fill: parent
+            radius: 20
+            color: Colors.overlay
+            border.color: Colors.border
+            border.width: 1
+        }
+
+        Row {
+            id: skipRow
+            anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; leftMargin: 14; rightMargin: 6 }
+            spacing: 12
+
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: mpv.skipPromptLabel
+                font.pixelSize: 13
+                color: Colors.overlayText
+            }
+
+            Rectangle {
+                width: 96
+                height: 30
+                radius: 15
+                anchors.verticalCenter: parent.verticalCenter
+                color: skipMouse.containsMouse || skipMouse.pressed ? Colors.accentGlow : Colors.accent
+                Behavior on color { ColorAnimation { duration: 110 } }
+                Text {
+                    anchors.centerIn: parent
+                    text: qsTr("Kihagyás ▸")
+                    font.pixelSize: 13
+                    font.weight: Font.DemiBold
+                    color: "#0b0b0e"
+                }
+                MouseArea {
+                    id: skipMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    onClicked: mpv.skipCurrent()
                 }
             }
         }
