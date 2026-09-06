@@ -1,4 +1,5 @@
 #include "Updater.h"
+#include "MpvCore.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -185,17 +186,33 @@ void Updater::installPackage()
     m_installProc = new QProcess(this);
     connect(m_installProc, &QProcess::finished, this, [this](int code) {
         const bool ok = (m_installProc->exitStatus() == QProcess::NormalExit
-                         && code == 0);
-        setStatus(ok
-                      ? QStringLiteral("Telepítés kész — indítsd újra az appot")
-                      : QStringLiteral("Telepítés megszakítva (%1)").arg(code));
+                         && m_installProc->readAllStandardOutput().contains(
+                                QByteArrayLiteral("OMAPLAYER_UPDATE_RC=0")));
+        if (ok) {
+            // Relaunch the (now updated) binary and close this instance, so
+            // the update lands in a fresh process instead of a stale one.
+            QStringList args;
+            const QString curFile = MpvCore::instance()->filePath();
+            if (!curFile.isEmpty())
+                args << curFile;
+            QProcess::startDetached(QCoreApplication::applicationFilePath(),
+                                    args);
+            setStatus(QStringLiteral("Telepítés kész — újraindítás…"));
+            QCoreApplication::exit(0);
+        } else {
+            setStatus(QStringLiteral("Telepítés megszakítva (%1)").arg(code));
+        }
         m_installProc->deleteLater();
         m_installProc = nullptr;
         setBusy(false);
     });
 
+    // Prefer a passwordless sudo (NOPASSWD) so the whole update is silent;
+    // otherwise fall back to the interactive sudo prompt in the terminal.
     const QString cmd = QStringLiteral(
-        "sudo pacman -U --noconfirm '%1'; echo; "
+        "sudo -n pacman -U --noconfirm '%1' 2>/dev/null || "
+        "sudo pacman -U --noconfirm '%1'; rc=$?; "
+        "echo \"OMAPLAYER_UPDATE_RC=$rc\"; echo; "
         "read -p 'Kész — nyomj Entert az ablak bezárásához'")
         .arg(m_downloadPath);
     m_installProc->start(QStringLiteral("foot"),

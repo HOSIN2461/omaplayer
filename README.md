@@ -27,7 +27,10 @@ magyar felülettel.
   (nincs StatusNotifier-host), minimalizálásra esik vissza
 - **Beépített frissítész**: „Frissítések keresése" menüpont a GitHub
   Releases-től ellenőrzi az új verziót; gombra letölti a csomagot és
-  `sudo pacman`-nal feltelepíti
+  `sudo pacman`-nal feltelepíti, majd **automatikusan újraindul** a friss
+  verzióval (a letöltés helyét `~/.cache/omarchy/omaplayer/`-ban tartja).
+  Előbb `sudo -n`-t próbál: ha be van állítva NOPASSWD-sudoerre a
+  pacman-parancsra, az egész frissítés jelszó nélkül, csendben lefut
 - **Intro / recap / kreditek kihagyása**: a fájl fejezetcímei (Intro, OP,
   Opening, Recap, Credits, ED, stáblista stb.) alapján a bevezető/
   visszatekintés/stáblista-szakaszban kihagyás-gomb jelenik meg felül
