@@ -1716,6 +1716,10 @@ ApplicationWindow {
                               vsInteger: true; vsValue: Math.round(mpv.speed * 100);
                               onChanged: v => mpv.speed = v / 100 }
 
+                ToggleRow { trLabel: qsTr("Intro/Stáblista automatikus átugrása"); trValue: mpv.autoSkip;
+                width: parent.width
+                            onToggled: v => mpv.autoSkip = v }
+
                 ToggleRow { trLabel: qsTr("Hardveres dekódolás"); trValue: mpv.hwdecEnabled;
                 width: parent.width
                             onToggled: v => mpv.hwdecEnabled = v }
@@ -2232,8 +2236,14 @@ ApplicationWindow {
     } }
     Shortcut { sequence: "F"; onActivated: root.toggleFullscreen() }
     Shortcut { sequence: "I"; onActivated: mpv.toggleMinimize() }
-    Shortcut { sequence: "G"; onActivated: openSettings() }
-    Shortcut { sequence: "L"; onActivated: openPlaylist() }
+    Shortcut { sequence: "G"; onActivated: {
+        if (settingsMenu.visible) { settingsMenu.close(); return }
+        openSettings()
+    } }
+    Shortcut { sequence: "L"; onActivated: {
+        if (playlistPanel.visible) { playlistPanel.close(); return }
+        openPlaylist()
+    } }
     Shortcut { sequence: "J"; onActivated: {
         if (jellyfinPanel.visible) { jellyfinPanel.close(); return }
         openJellyfin()

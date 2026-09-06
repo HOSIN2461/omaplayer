@@ -14,6 +14,9 @@ Item {
 
     property bool hasBack: visible && navStack.length > 1
     property var navStack: []
+    // True while the server list is shown even though a server session is
+    // active (the home icon jumps here; re-entering a server hides it again).
+    property bool atServerList: false
 
     function open() {
         visible = true
@@ -53,29 +56,36 @@ Item {
 
     function showServerList() {
         navStack = []
+        atServerList = true
         navTitle.text = qsTr("Jellyfin")
     }
     function showViews() {
+        atServerList = false
         push("views", jellyfin.activeServerName.length ? jellyfin.activeServerName : qsTr("Könyvtárak"))
         jellyfin.fetchViews()
     }
     function showResume() {
+        atServerList = false
         push("resume", qsTr("Folytatás"))
         jellyfin.fetchResume()
     }
     function showNextUp() {
+        atServerList = false
         push("nextup", qsTr("Következő epizód"))
         jellyfin.fetchNextUp()
     }
     function showItems(parentId, name) {
+        atServerList = false
         push("items", name, { parentId: parentId })
         jellyfin.fetchItems(parentId)
     }
     function showSeasons(seriesId, name) {
+        atServerList = false
         push("seasons", name, { seriesId: seriesId })
         jellyfin.fetchSeasons(seriesId)
     }
     function showEpisodes(seriesId, seasonId, seasonName) {
+        atServerList = false
         push("episodes", seasonName, { seriesId: seriesId, seasonId: seasonId })
         jellyfin.fetchEpisodes(seriesId, seasonId)
     }
@@ -148,6 +158,17 @@ Item {
             IconButton {
                 implicitWidth: 26
                 implicitHeight: 26
+                glyph: "\uF2F5"                       // FA right-from-bracket: logout
+                tip: qsTr("Kijelentkezés")
+                visible: jellyfin.activeServerName.length > 0
+                onClicked: {
+                    jellyfin.logout()
+                    showServerList()
+                }
+            }
+            IconButton {
+                implicitWidth: 26
+                implicitHeight: 26
                 glyph: "\uF00D"                       // FA xmark
                 tip: qsTr("Bezárás (Esc)")
                 onClicked: close()
@@ -158,7 +179,7 @@ Item {
         Row {
             id: quickRow
             Layout.fillWidth: true
-            visible: jellyfin.activeServerName.length > 0
+            visible: !atServerList && jellyfin.activeServerName.length > 0
             spacing: 5
 
             readonly property var tabs: [
@@ -195,7 +216,7 @@ Item {
             id: serverFlick
             Layout.fillWidth: true
             Layout.fillHeight: true
-            visible: jellyfin.activeServerName.length === 0
+            visible: atServerList || jellyfin.activeServerName.length === 0
             clip: true
             contentHeight: serverCol.implicitHeight
             Column {
@@ -420,7 +441,7 @@ Item {
 
         // --- search (only while connected) --------------------------------
         RowLayout {
-            visible: jellyfin.activeServerName.length > 0
+            visible: !atServerList && jellyfin.activeServerName.length > 0
             Layout.fillWidth: true
             spacing: 5
 
@@ -453,7 +474,7 @@ Item {
 
         // --- empty state (no results / nothing loaded yet) ----------------
         Text {
-            visible: jellyfin.activeServerName.length > 0
+            visible: !atServerList && jellyfin.activeServerName.length > 0
                      && !jellyfin.busy && jellyfin.items.length === 0
             Layout.fillWidth: true
             Layout.alignment: Qt.AlignHCenter
@@ -467,7 +488,7 @@ Item {
             id: itemList
             Layout.fillWidth: true
             Layout.fillHeight: true
-            visible: jellyfin.activeServerName.length > 0
+            visible: !atServerList && jellyfin.activeServerName.length > 0
             clip: true
             model: jellyfin.items
             spacing: 3

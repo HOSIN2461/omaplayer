@@ -225,7 +225,14 @@ private:
     };
     void recomputeSkipRanges(const mpv_node *list);
     void rebuildSkipRanges();
-    bool classifyChapter(const QString &title, SkipType &type) const;
+    void collectTitleSections(QVector<SkipRange> &ranges,
+                              const QVector<QPair<double, QString>> &chapters,
+                              double total, bool movie) const;
+    void collectTimingSection(QVector<SkipRange> &ranges,
+                              const QVector<QPair<double, QString>> &chapters,
+                              double total) const;
+    static QString normalizeChapterTitle(const QString &title);
+    static bool classifyTitle(const QString &title, SkipType &type);
     void checkSkipPrompt();
     void skipRange(int index);
     void setSkipPromptVisible(bool visible);

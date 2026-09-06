@@ -553,6 +553,45 @@ void MpvCore::recomputeSkipRanges(const mpv_node *list)
     rebuildSkipRanges();
 }
 
+namespace {
+
+// Constants ported from the iina-skip-intro plugin (detectors/shared.js,
+// chapter-title.js, chapter-timing.js). Detection is skipped below 10 minutes
+// and movie-length media only gets credits (mirroring the plugin's guards).
+constexpr double kDetectMinDuration = 10.0 * 60.0;
+constexpr double kMovieMinDuration = 90.0 * 60.0;
+constexpr double kIntroMaxStart = 300.0;
+constexpr double kIntroMaxStartRatio = 0.25;
+constexpr double kIntroMinDuration = 15.0;
+constexpr double kIntroMaxDuration = 140.0;
+constexpr double kCreditsMinDuration = 30.0;
+constexpr double kCreditsMinRuntime = 15.0 * 60.0;
+constexpr double kCreditsMaxRuntime = 3.0 * 60.0 * 60.0;
+constexpr double kCreditsMinEndDistance = 3.0 * 60.0;
+constexpr double kCreditsMaxEndDistance = 15.0 * 60.0;
+constexpr double kCreditsMinMaxDuration = 2.5 * 60.0;
+constexpr double kCreditsMaxMaxDuration = 14.0 * 60.0;
+
+constexpr double kTimingMaxStart = 360.0;
+constexpr int kTimingMaxChapterIndex = 4;
+constexpr double kTimingMinDuration = 20.0;
+constexpr double kTimingMaxDuration = 140.0;
+constexpr double kTimingMinNextDuration = 180.0;
+constexpr double kTimingMinNextRatio = 2.5;
+constexpr double kTimingMinNextRuntimeRatio = 0.2;
+constexpr int kTimingTopLongestCount = 3;
+constexpr int kTimingMinScore = 60;
+constexpr int kTimingMinMargin = 12;
+constexpr int kTimingIntroTitleBonus = 8;
+constexpr int kTimingRecapTitleBonus = 20;
+
+double clampDouble(double value, double min, double max)
+{
+    return std::clamp(value, min, max);
+}
+
+} // namespace
+
 void MpvCore::rebuildSkipRanges()
 {
     m_skipRanges.clear();
@@ -562,57 +601,334 @@ void MpvCore::rebuildSkipRanges()
     if (n == 0)
         return;
     const double total = m_duration;
-    for (int i = 0; i < n; ++i) {
-        const double start = m_rawChapters.at(i).first;
-        // mpv reports only the chapter start ("time"); the duration ends at
-        // the next chapter, or the file duration for the last one.
-        const double next = i + 1 < n ? m_rawChapters.at(i + 1).first : total;
-        if (total <= 0.0 && i + 1 == n)
-            continue; // last chapter's end is unknown yet
-        const double end = next;
-        if (end <= start + 0.5)
+    if (total <= 0.0 || total < kDetectMinDuration)
+        return;
+
+    const bool movie = total >= kMovieMinDuration;
+    // Title-based detection: intros/recaps only for episode-length media,
+    // credits for everything (movies included).
+    collectTitleSections(m_skipRanges, m_rawChapters, total, movie);
+
+    // Timing fallback only kicks in when titles found nothing, and never for
+    // movies — the structure heuristic is meant for episode-length media.
+    if (m_skipRanges.isEmpty() && !movie)
+        collectTimingSection(m_skipRanges, m_rawChapters, total);
+}
+
+QString MpvCore::normalizeChapterTitle(const QString &title)
+{
+    QString t = title.trimmed().toLower();
+    static const QRegularExpression hyphenRe("[-_]+");
+    static const QRegularExpression wsRe("\\s+");
+    static const QRegularExpression edgeRe("^[\\s:;,.!?\\-]+|[\\s:;,.!?\\-]+$");
+    t.replace(hyphenRe, " ");
+    t.replace(wsRe, " ");
+    t.replace(edgeRe, "");
+    return t;
+}
+
+bool MpvCore::classifyTitle(const QString &title, SkipType &type)
+{
+    const QString n = normalizeChapterTitle(title);
+    if (n.isEmpty())
+        return false;
+
+    static const QRegularExpression studioLogoRe("^studio logo(?:\\s+\\d+)?$");
+    static const QRegularExpression opRe("^op\\s*\\d*$");
+    static const QRegularExpression openingRe(
+        "^opening(?:\\s+\\d+|\\s+(?:theme|song|credits))?$");
+    static const QRegularExpression ncopRe("^ncop\\s*\\d*$");
+    static const QRegularExpression nonCreditOpeningRe(
+        "^non credit opening(?:\\s+\\d+)?$");
+
+    if (studioLogoRe.match(n).hasMatch() || opRe.match(n).hasMatch()
+        || openingRe.match(n).hasMatch() || n == QLatin1String("intro")
+        || n == QLatin1String("title card") || n == QLatin1String("title sequence")
+        || n == QLatin1String("main title") || n == QLatin1String("bevezetés")
+        || n == QLatin1String("bevezető") || ncopRe.match(n).hasMatch()
+        || nonCreditOpeningRe.match(n).hasMatch()) {
+        type = SkipType::Intro;
+        return true;
+    }
+
+    static const QSet<QString> recapTitles = {
+        QStringLiteral("recap"), QStringLiteral("previously on"),
+        QStringLiteral("last time on"), QStringLiteral("previous episode"),
+        QStringLiteral("story so far"), QStringLiteral("episode recap"),
+        QStringLiteral("series recap"), QStringLiteral("digest"),
+        QStringLiteral("summary"), QStringLiteral("visszatekintés"),
+        QStringLiteral("visszatekintő"),
+    };
+    if (recapTitles.contains(n)) {
+        type = SkipType::Recap;
+        return true;
+    }
+
+    static const QRegularExpression creditsCountRe("^credits?\\s+\\d+$");
+    static const QRegularExpression edRe("^ed\\s*\\d*$");
+    static const QRegularExpression endingRe(
+        "^ending(?:\\s+\\d+|\\s+(?:theme|song|credits))$");
+    static const QRegularExpression ncedRe("^nced\\s*\\d*$");
+    static const QRegularExpression ncEdRe("^nc\\s+ed\\s*\\d*$");
+    static const QRegularExpression nonCreditEndingRe(
+        "^non credit ending(?:\\s+\\d+)?$");
+
+    if (n == QLatin1String("credits") || n == QLatin1String("credit")
+        || n == QLatin1String("end credits") || n == QLatin1String("ending credits")
+        || n == QLatin1String("closing credits") || n == QLatin1String("final credits")
+        || n == QLatin1String("staff credits") || n == QLatin1String("credit roll")
+        || n == QLatin1String("credits roll") || n == QLatin1String("credits start")
+        || n == QLatin1String("stáblista") || creditsCountRe.match(n).hasMatch()
+        || edRe.match(n).hasMatch() || endingRe.match(n).hasMatch()
+        || n == QLatin1String("clean ending") || n == QLatin1String("textless ending")
+        || ncedRe.match(n).hasMatch() || ncEdRe.match(n).hasMatch()
+        || nonCreditEndingRe.match(n).hasMatch()) {
+        type = SkipType::Credits;
+        return true;
+    }
+
+    return false;
+}
+
+double creditsMaxDuration(double duration)
+{
+    const double ratio = clampDouble(
+        (duration - kCreditsMinRuntime) / (kCreditsMaxRuntime - kCreditsMinRuntime),
+        0.0, 1.0);
+    return kCreditsMinMaxDuration
+           + (kCreditsMaxMaxDuration - kCreditsMinMaxDuration) * ratio;
+}
+
+double creditsMaxEndDistance(double duration)
+{
+    const double ratio = clampDouble(
+        (duration - kCreditsMinRuntime) / (kCreditsMaxRuntime - kCreditsMinRuntime),
+        0.0, 1.0);
+    return kCreditsMinEndDistance
+           + (kCreditsMaxEndDistance - kCreditsMinEndDistance) * ratio;
+}
+
+static bool isSectionStartInRange(double start, double duration, double maxStart)
+{
+    return start >= 0.0 && start <= maxStart
+           && start <= duration * kIntroMaxStartRatio;
+}
+
+static bool isValidTitleSection(double start, double end, double duration)
+{
+    if (!isSectionStartInRange(start, duration, kIntroMaxStart))
+        return false;
+    if (end <= start)
+        return false;
+    const double len = end - start;
+    return len >= kIntroMinDuration && len <= kIntroMaxDuration;
+}
+
+static bool isValidCreditsTitleSection(double start, double end, double duration)
+{
+    if (start < 0.0 || end <= start || end > duration + 1.0)
+        return false;
+    const double len = end - start;
+    const double distanceFromEnd = duration - start;
+    return len >= kCreditsMinDuration && len <= creditsMaxDuration(duration)
+           && distanceFromEnd <= creditsMaxEndDistance(duration);
+}
+
+void MpvCore::collectTitleSections(QVector<SkipRange> &ranges,
+                                   const QVector<QPair<double, QString>> &chapters,
+                                   double total, bool movie) const
+{
+    if (chapters.size() < 2 || total <= 0.0)
+        return;
+
+    for (int i = 0; i < chapters.size(); ++i) {
+        SkipType kind;
+        if (!classifyTitle(chapters.at(i).second, kind))
             continue;
-        SkipType type;
-        if (!classifyChapter(m_rawChapters.at(i).second, type))
+        // In movies only credits carry reliable title markers.
+        if (movie && kind != SkipType::Credits)
             continue;
-        const double len = end - start;
-        if (len < 5.0 || len > (type == SkipType::Credits ? 600.0 : 360.0))
-            continue;
-        // Intro/recap only makes sense early on; credits only near the end.
-        if (type == SkipType::Intro || type == SkipType::Recap) {
-            if (total > 0.0 && start > total * 0.25)
+        // A bare "Intro" chapter is ignored when a more specific opening
+        // chapter (OP1, Opening Theme, …) appears later in the file.
+        if (kind == SkipType::Intro
+            && normalizeChapterTitle(chapters.at(i).second) == QLatin1String("intro")) {
+            bool laterSpecific = false;
+            for (int j = i + 1; j < chapters.size(); ++j) {
+                SkipType other;
+                if (classifyTitle(chapters.at(j).second, other)
+                    && other == SkipType::Intro
+                    && normalizeChapterTitle(chapters.at(j).second)
+                           != QLatin1String("intro")) {
+                    laterSpecific = true;
+                    break;
+                }
+            }
+            if (laterSpecific)
                 continue;
-        } else if (total > 0.0 && end < total * 0.75) {
-            continue;
         }
-        m_skipRanges.append({ start, end, type, false });
+
+        const double start = chapters.at(i).first;
+        if (kind == SkipType::Credits) {
+            const double end = i + 1 < chapters.size() ? chapters.at(i + 1).first
+                                                       : total;
+            if (isValidCreditsTitleSection(start, end, total))
+                ranges.append({ start, end, kind, false });
+        } else {
+            // Intro/recap must be followed by a real chapter, never last.
+            if (i + 1 >= chapters.size())
+                continue;
+            const double end = chapters.at(i + 1).first;
+            if (isValidTitleSection(start, end, total))
+                ranges.append({ start, end, kind, false });
+        }
     }
 }
 
-bool MpvCore::classifyChapter(const QString &title, SkipType &type) const
+void MpvCore::collectTimingSection(QVector<SkipRange> &ranges,
+                                   const QVector<QPair<double, QString>> &chapters,
+                                   double total) const
 {
-    const QStringList words = title.toLower()
-                                  .split(QRegularExpression("\\W+"),
-                                         Qt::SkipEmptyParts);
-    for (const QString &w : words) {
-        if (w == "intro" || w == "opening" || w == "preface"
-            || w == "bevezetés" || w == "bevezető"
-            || (w.startsWith("op") && w.length() <= 4)) {
-            type = SkipType::Intro;
-            return true;
-        }
-        if (w == "recap" || w == "recaps" || w == "previously"
-            || w == "visszatekintés" || w == "visszatekintő") {
-            type = SkipType::Recap;
-            return true;
-        }
-        if (w == "credits" || w == "credit" || w == "ending" || w == "outro"
-            || w == "stáblista" || (w.startsWith("ed") && w.length() <= 4)) {
-            type = SkipType::Credits;
-            return true;
+    // Ported from detectors/chapter-timing.js. Infers an intro from the
+    // "short early chapter followed by a much longer chapter" structure,
+    // which works even when chapters have no (usable) titles.
+    struct Candidate {
+        int chapterNumber = 0;
+        double start = 0.0;
+        double end = 0.0;
+        double length = 0.0;
+        double prevLength = -1.0; // missing lead-in
+        double nextLength = -1.0; // no following chapter
+        int nextLengthRank = -1;
+        bool nextIsTopLongest = false;
+        bool hasTitleKind = false;
+        SkipType titleKind = SkipType::Intro;
+        int score = 0;
+    };
+
+    if (chapters.size() < 2 || total <= 0.0)
+        return;
+
+    QVector<Candidate> derived;
+    for (int i = 0; i < chapters.size(); ++i) {
+        const double start = chapters.at(i).first;
+        const double end = i + 1 < chapters.size() ? chapters.at(i + 1).first : total;
+        if (end <= start)
+            continue;
+        Candidate c;
+        c.chapterNumber = i + 1;
+        c.start = start;
+        c.end = end;
+        c.length = end - start;
+        c.hasTitleKind = classifyTitle(chapters.at(i).second, c.titleKind);
+        derived.append(c);
+    }
+    if (derived.size() < 2)
+        return;
+
+    QVector<double> lengths;
+    lengths.reserve(derived.size());
+    for (const Candidate &c : derived)
+        lengths.append(c.length);
+    std::sort(lengths.begin(), lengths.end(), std::greater<double>());
+
+    for (int j = 0; j < derived.size(); ++j) {
+        Candidate &c = derived[j];
+        if (j > 0)
+            c.prevLength = derived[j - 1].length;
+        if (j + 1 < derived.size()) {
+            c.nextLength = derived[j + 1].length;
+            c.nextLengthRank = lengths.indexOf(c.nextLength) + 1;
+            c.nextIsTopLongest = c.nextLengthRank > 0
+                                 && c.nextLengthRank <= kTimingTopLongestCount;
         }
     }
-    return false;
+
+    QVector<Candidate> scored;
+    for (int i = 0; i < derived.size(); ++i) {
+        Candidate c = derived.at(i);
+        if (c.chapterNumber > kTimingMaxChapterIndex)
+            continue; // chapter-position
+        if (!isSectionStartInRange(c.start, total, kTimingMaxStart))
+            continue; // late-start
+        if (c.length < kTimingMinDuration || c.length > kTimingMaxDuration)
+            continue; // chapter-length
+        if (c.nextLength < kTimingMinNextDuration)
+            continue; // short-next-chapter
+        if (c.nextLength / c.length < kTimingMinNextRatio)
+            continue; // weak-next-ratio
+        if (!c.nextIsTopLongest
+            && c.nextLength < total * kTimingMinNextRuntimeRatio)
+            continue; // next-not-dominant
+        if (c.hasTitleKind && c.titleKind == SkipType::Recap)
+            continue; // recap never picked by the structural fallback
+
+        int score = 0;
+        if (c.chapterNumber == 1)
+            score += 20;
+        else if (c.chapterNumber == 2)
+            score += 15;
+        else if (c.chapterNumber == 3)
+            score += 8;
+        else if (c.chapterNumber == 4)
+            score += 3;
+
+        if (c.length >= 45.0 && c.length <= 110.0)
+            score += 20; // ideal-duration
+        else
+            score += 10; // acceptable-duration
+
+        if (c.nextLengthRank == 1)
+            score += 25;
+        else if (c.nextLengthRank == 2)
+            score += 18;
+        else if (c.nextLengthRank == 3)
+            score += 10;
+
+        const double nextRatio = c.nextLength / c.length;
+        if (nextRatio >= 5.0)
+            score += 20;
+        else if (nextRatio >= 3.0)
+            score += 12;
+        else
+            score += 6;
+
+        if (c.prevLength < 0.0 || c.prevLength <= 240.0)
+            score += 10; // short-or-no-lead-in
+        else if (c.prevLength <= 360.0)
+            score += 5; // moderate-lead-in
+
+        if (c.start <= 120.0)
+            score += 10; // very-early-start
+        else if (c.start <= 240.0)
+            score += 5; // early-start
+
+        if (c.hasTitleKind) {
+            if (c.titleKind == SkipType::Intro)
+                score += kTimingIntroTitleBonus;
+            else if (c.titleKind == SkipType::Credits)
+                score += kTimingRecapTitleBonus;
+        }
+
+        c.score = score;
+        scored.append(c);
+    }
+    if (scored.isEmpty())
+        return;
+
+    std::sort(scored.begin(), scored.end(), [](const Candidate &a, const Candidate &b) {
+        if (a.score != b.score)
+            return a.score > b.score;
+        return a.chapterNumber < b.chapterNumber;
+    });
+    const Candidate &winner = scored.first();
+    const Candidate &runnerUp = scored.size() > 1 ? scored.at(1) : winner;
+    const int margin = scored.size() > 1 ? winner.score - runnerUp.score
+                                         : winner.score;
+    if (winner.score < kTimingMinScore || margin < kTimingMinMargin)
+        return;
+
+    SkipType type = winner.hasTitleKind ? winner.titleKind : SkipType::Intro;
+    ranges.append({ winner.start, winner.end, type, false });
 }
 
 void MpvCore::checkSkipPrompt()
