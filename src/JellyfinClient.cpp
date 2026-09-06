@@ -25,6 +25,10 @@ QString apiKeyQuery(const QString &token)
     return QStringLiteral("api_key=") + token;
 }
 
+// Item fields the info overlay renders (plus the data playback needs).
+constexpr char kItemFields[] =
+    "Overview,Genres,CommunityRating,ProviderIds,ProductionYear,MediaSources";
+
 } // namespace
 
 JellyfinClient::JellyfinClient(QObject *parent)
@@ -339,6 +343,27 @@ QVariantMap JellyfinClient::normalizeItem(const QJsonObject &o) const
     const QJsonObject tags = o.value(QLatin1String("ImageTags")).toObject();
     m.insert(QStringLiteral("imageTag"),
              tags.value(QLatin1String("Primary")).toString());
+    m.insert(QStringLiteral("backdropTag"),
+             tags.value(QLatin1String("Backdrop")).toString());
+
+    // --- metadata enrichment for the info overlay ------------------------
+    m.insert(QStringLiteral("overview"), o.value(QLatin1String("Overview")).toString());
+    m.insert(QStringLiteral("communityRating"),
+             o.value(QLatin1String("CommunityRating")).toDouble());
+    m.insert(QStringLiteral("officialRating"),
+             o.value(QLatin1String("OfficialRating")).toString());
+
+    QVariantList genres;
+    const QJsonArray ga = o.value(QLatin1String("Genres")).toArray();
+    for (const QJsonValue &g : ga)
+        genres.append(g.toString());
+    m.insert(QStringLiteral("genres"), genres);
+
+    // ProviderIds carries the TMDB/IMDb ids — that powers the external link
+    // ("megnézem a TMDb-n/IMDb-n") without any separate lookup.
+    const QJsonObject providers = o.value(QLatin1String("ProviderIds")).toObject();
+    m.insert(QStringLiteral("tmdbId"), providers.value(QLatin1String("Tmdb")).toString());
+    m.insert(QStringLiteral("imdbId"), providers.value(QLatin1String("Imdb")).toString());
 
     const QJsonObject ud = o.value(QLatin1String("UserData")).toObject();
     m.insert(QStringLiteral("playbackPositionTicks"),
@@ -396,7 +421,7 @@ void JellyfinClient::fetchItems(const QString &parentId, int limit)
         + QStringLiteral("&Recursive=false")
         + QStringLiteral("&SortBy=SortName")
         + QStringLiteral("&SortOrder=Ascending")
-        + QStringLiteral("&Fields=ProductionYear,Path,MediaSources")
+        + QStringLiteral("&Fields=Overview,Genres,CommunityRating,ProviderIds,ProductionYear,Path,MediaSources")
         + QStringLiteral("&Limit=") + QString::number(limit)
         + QLatin1Char('&') + apiKeyQuery(token());
     fetchAsItems(url);
@@ -410,7 +435,7 @@ void JellyfinClient::fetchResume()
         + QStringLiteral("UserId=") + m_active.value(QStringLiteral("userId")).toString()
         + QStringLiteral("&MediaTypes=Video")
         + QStringLiteral("&Limit=20")
-        + QStringLiteral("&Fields=ProductionYear,MediaSources")
+        + QStringLiteral("&Fields=") + QLatin1String(kItemFields)
         + QLatin1Char('&') + apiKeyQuery(token());
     fetchAsItems(url);
 }
@@ -422,7 +447,7 @@ void JellyfinClient::fetchNextUp()
     const QString url = baseUrl() + QStringLiteral("/Shows/NextUp?")
         + QStringLiteral("UserId=") + m_active.value(QStringLiteral("userId")).toString()
         + QStringLiteral("&Limit=20")
-        + QStringLiteral("&Fields=ProductionYear,MediaSources")
+        + QStringLiteral("&Fields=") + QLatin1String(kItemFields)
         + QLatin1Char('&') + apiKeyQuery(token());
     fetchAsItems(url);
 }
@@ -434,7 +459,7 @@ void JellyfinClient::fetchSeasons(const QString &seriesId)
     const QString url = baseUrl() + QStringLiteral("/Shows/") + seriesId
         + QStringLiteral("/Seasons?")
         + QStringLiteral("UserId=") + m_active.value(QStringLiteral("userId")).toString()
-        + QStringLiteral("&Fields=ProductionYear,MediaSources")
+        + QStringLiteral("&Fields=") + QLatin1String(kItemFields)
         + QLatin1Char('&') + apiKeyQuery(token());
     fetchAsItems(url);
 }
@@ -447,7 +472,7 @@ void JellyfinClient::fetchEpisodes(const QString &seriesId, const QString &seaso
         + QStringLiteral("/Episodes?")
         + QStringLiteral("UserId=") + m_active.value(QStringLiteral("userId")).toString()
         + QStringLiteral("&seasonId=") + seasonId
-        + QStringLiteral("&Fields=ProductionYear,MediaSources")
+        + QStringLiteral("&Fields=") + QLatin1String(kItemFields)
         + QLatin1Char('&') + apiKeyQuery(token());
     fetchAsItems(url);
 }
@@ -565,6 +590,8 @@ void JellyfinClient::startPlayback(const QVariantMap &item)
 
             // 4) Start progress tracking.
             m_tracking = true;
+            m_trackItem = item;
+            Q_EMIT playingItemChanged();
             m_trackItemId = item.value(QStringLiteral("id")).toString();
             m_trackSeriesId = item.value(QStringLiteral("seriesId")).toString();
             m_trackSession = sessionId;
@@ -631,7 +658,7 @@ void JellyfinClient::advanceToNextEpisode()
         + QStringLiteral("UserId=") + m_active.value(QStringLiteral("userId")).toString()
         + QStringLiteral("&SeriesId=") + seriesId
         + QStringLiteral("&Limit=1")
-        + QStringLiteral("&Fields=ProductionYear,MediaSources")
+        + QStringLiteral("&Fields=") + QLatin1String(kItemFields)
         + QLatin1Char('&') + apiKeyQuery(token());
     get(QUrl(url), [this](const QJsonObject &obj) {
         m_advancing = false;
@@ -672,5 +699,7 @@ void JellyfinClient::reportStop()
              [this](const QJsonObject &) {});
     }
     m_tracking = false;
+    m_trackItem.clear();
+    Q_EMIT playingItemChanged();
     m_progressTimer->stop();
 }

@@ -2,6 +2,7 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQmlError>
+#include <QtQml>
 #include <QQuickWindow>
 #include <QDBusConnection>
 #include <QLocale>
@@ -15,6 +16,7 @@
 #include "MpvCore.h"
 #include "MprisPlayer.h"
 #include "JellyfinClient.h"
+#include "MetadataInfo.h"
 
 using namespace Qt::Literals::StringLiterals;
 
@@ -107,6 +109,8 @@ int main(int argc, char *argv[])
     auto *jellyfin = new JellyfinClient(&app);
     engine.rootContext()->setContextProperty(
         QStringLiteral("jellyfin"), jellyfin);
+    // Pause-overlay metadata (Jellyfin items + optional TMDb for local files).
+    qmlRegisterType<MetadataInfo>("Omaplayer.Meta", 1, 0, "MetadataInfo");
     QObject::connect(
         &engine, &QQmlApplicationEngine::objectCreationFailed,
         &app, [] { qWarning() << "MAIN: objectCreationFailed"; QCoreApplication::exit(-1); },

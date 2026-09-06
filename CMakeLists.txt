@@ -26,6 +26,8 @@ qt_add_executable(omaplayer
     src/JellyfinClient.h
     src/AudioIntroMatcher.cpp
     src/AudioIntroMatcher.h
+    src/MetadataInfo.cpp
+    src/MetadataInfo.h
 )
 
 set_source_files_properties(qml/Colors.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
@@ -39,6 +41,7 @@ qt_add_qml_module(omaplayer
         qml/IconButton.qml
         qml/Colors.qml
         qml/JellyfinPanel.qml
+        qml/MetaOverlay.qml
 )
 
 target_include_directories(omaplayer PRIVATE src)

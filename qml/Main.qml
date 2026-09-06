@@ -3,6 +3,7 @@ import QtQuick.Controls
 import QtQuick.Dialogs
 import QtQuick.Layouts
 import Omaplayer
+import Omaplayer.Meta 1.0
 
 ApplicationWindow {
     id: root
@@ -50,6 +51,57 @@ ApplicationWindow {
         onJellyfin: () => openJellyfin()
         onRetouch: () => reTouch()
         onFlash: (g, t) => flashAction(g, t)
+    }
+
+    // Pause-overlay metadata: unified provider for Jellyfin items and local
+    // files (TMDb lookups for the latter when a key is configured).
+    MetadataInfo {
+        id: meta
+    }
+
+    MetaOverlay {
+        id: metaOverlay
+        anchors.fill: parent
+        meta: meta
+        playing: mpv.playing
+        onOpenSettings: openSettings()
+    }
+
+    // Keep the overlay in sync with whatever is being watched. Jellyfin items
+    // come already enriched; local files fall back to the TMDb path.
+    function refreshMeta() {
+        const item = jellyfin.playingItem
+        if (item && item.itemId) {
+            meta.forJellyfin(item, jellyfin.imageUrl(item.itemId, "Primary", 400),
+                             jellyfin.imageUrl(item.itemId, "Backdrop", 1280))
+        } else if (mpv.filePath.length > 0) {
+            meta.forLocalFile(mpv.filePath)
+        } else {
+            meta.clear()
+        }
+    }
+
+    Connections {
+        target: mpv
+        function onFilePathChanged() { metaTimer.restart() }
+    }
+    Connections {
+        target: jellyfin
+        function onPlayingItemChanged() { metaTimer.restart() }
+    }
+    // Saving a TMDb key should immediately retry a previously "needkey" item
+    // so the card fills in without reopening the file.
+    Connections {
+        target: meta
+        function onTmdbKeyChanged() {
+            if (meta.info && meta.info.state === "needkey")
+                metaTimer.restart()
+        }
+    }
+    Timer {
+        id: metaTimer
+        interval: 350
+        onTriggered: refreshMeta()
     }
 
     // Auto-hide: fade the bar away after idle, keep it while the pointer or a
@@ -1734,6 +1786,34 @@ ToggleRow { trLabel: qsTr("Audio-hasonlóság érzékelés (fejezet nélküli ep
                 width: parent.width
                             trValue: mpv.audioDetection;
                             onToggled: v => mpv.audioDetection = v }
+
+                SectionLabel { text: qsTr("Információ (szünet)") }
+                ToggleRow { trLabel: qsTr("Metaadat kártya szünetnél"); trValue: meta.overlayEnabled;
+                            onToggled: v => meta.overlayEnabled = v }
+                RowLayout {
+                    width: parent.width
+                    spacing: 8
+                    TextField {
+                        id: keyFieldId
+                        Layout.fillWidth: true
+                        placeholderText: qsTr("TMDB API kulcs (lokális fájlok)")
+                        text: meta.tmdbKey
+                        color: Colors.overlayText
+                        onEditingFinished: meta.tmdbKey = text
+                        MouseArea {
+                            anchors.fill: parent
+                            acceptedButtons: Qt.LeftButton
+                            onPressed: parent.forceActiveFocus()
+                        }
+                    }
+                    Button {
+                        text: meta.tmdbKey.length > 0 ? qsTr("Kulcs mentés") : qsTr("Kulcs mentés")
+                        onClicked: {
+                            meta.tmdbKey = keyFieldId.text
+                            keyFieldId.focus = false
+                        }
+                    }
+                }
 
                 ToggleRow { trLabel: qsTr("Hardveres dekódolás"); trValue: mpv.hwdecEnabled;
                 width: parent.width

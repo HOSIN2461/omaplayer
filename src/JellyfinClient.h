@@ -30,6 +30,8 @@ class JellyfinClient : public QObject
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
     Q_PROPERTY(QString activeServerName READ activeServerName NOTIFY connectionChanged)
     Q_PROPERTY(QString deviceId READ deviceId CONSTANT)
+    // The item currently reported as playing (for the info overlay).
+    Q_PROPERTY(QVariantMap playingItem READ playingItem NOTIFY playingItemChanged)
 
 public:
     explicit JellyfinClient(QObject *parent = nullptr);
@@ -40,6 +42,7 @@ public:
     bool busy() const { return m_busy; }
     QString activeServerName() const { return m_serverName; }
     QString deviceId() const { return m_deviceId; }
+    QVariantMap playingItem() const { return m_trackItem; }
 
     // --- server management ---------------------------------------------
     Q_INVOKABLE void addServer(const QString &serverUrl);
@@ -74,6 +77,7 @@ signals:
     void statusChanged();
     void busyChanged();
     void connectionChanged();
+    void playingItemChanged();
 
 private:
     void persistServers();
@@ -120,4 +124,5 @@ private:
     QString m_trackSession;
     QString m_trackMediaSource;
     double m_lastPositionSeconds = 0.0;
+    QVariantMap m_trackItem;      // last started item (info overlay)
 };
