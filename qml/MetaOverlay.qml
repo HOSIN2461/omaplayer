@@ -19,6 +19,32 @@ Item {
     visible: false
     z: 3
 
+    // Text pill button in the player's visual language: translucent dark
+    // backing, accent glow on hover, gentle squish on press.
+    component MetaButton: Button {
+        id: control
+        implicitHeight: 26
+        background: Rectangle {
+            radius: 13
+            color: control.hovered || control.pressed ? Colors.hover : "#26ffffff"
+            border.color: control.hovered ? Colors.borderGlow : Colors.border
+            border.width: 1
+            scale: control.pressed ? 0.93 : 1
+            Behavior on color { ColorAnimation { duration: 110 } }
+            Behavior on scale { NumberAnimation { duration: 110; easing.type: Easing.OutCubic } }
+        }
+        contentItem: Text {
+            text: control.text
+            color: control.pressed ? Colors.accent
+                 : control.hovered ? Colors.overlayText
+                 : Colors.overlayText
+            font.pixelSize: 11
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            Behavior on color { ColorAnimation { duration: 110 } }
+        }
+    }
+
     // --- visibility: appear on pause (slightly delayed), vanish on resume --
     property bool showable: !meta.busy
                             && !playing
@@ -51,7 +77,7 @@ Item {
     // --- backdrop ----------------------------------------------------------
     Rectangle {
         anchors.fill: parent
-        color: "#99000000"
+        color: "#44000000"
         visible: cardRoot.visible && (!!meta.info.backdropUrl)
     }
     Image {
@@ -70,12 +96,17 @@ Item {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        anchors.leftMargin: 14
-        anchors.rightMargin: 14
-        anchors.bottomMargin: 84
+        anchors.leftMargin: 12
+        anchors.rightMargin: 12
+        anchors.bottomMargin: 68
 
-        color: Colors.overlay
-        border.color: Colors.border
+        // Same translucent gradient backing as the control bar.
+        gradient: Gradient {
+            GradientStop { position: 0.00; color: "#9c4a5a6e" }
+            GradientStop { position: 0.30; color: "#c90d0d12" }
+            GradientStop { position: 1.00; color: "#e60d0d12" }
+        }
+        border.color: "#3dffffff"
         radius: Colors.radius
 
         // === ok: real data ===
@@ -87,13 +118,15 @@ Item {
                 Item { Layout.preferredWidth: 4 }
 
                 Image {
-                    Layout.preferredWidth: 112
-                    Layout.preferredHeight: 168
-                    Layout.alignment: Qt.AlignVCenter
+                    id: posterImg
+                    Layout.preferredWidth: 148
+                    Layout.preferredHeight: 218
+                    Layout.alignment: Qt.AlignTop
+                    Layout.topMargin: 14
+                    Layout.bottomMargin: 14
                     source: meta.info.posterUrl ?? ""
                     fillMode: Image.PreserveAspectCrop
                     clip: true
-                    visible: source.length > 0
                     Rectangle {
                         anchors.fill: parent
                         visible: parent.source.length === 0
@@ -110,12 +143,12 @@ Item {
                 ColumnLayout {
                     Layout.fillWidth: true
                     Layout.alignment: Qt.AlignVCenter
-                    spacing: 3
+                    spacing: 4
 
                     Text {
                         text: meta.info.title ?? ""
                         color: Colors.overlayText
-                        font.pointSize: 17
+                        font.pointSize: 16
                         font.bold: true
                         Layout.fillWidth: true
                         elide: Text.ElideRight
@@ -123,8 +156,8 @@ Item {
                     Text {
                         visible: (meta.info.subtitle ?? "").length > 0
                         text: meta.info.subtitle ?? ""
-                        color: Colors.textDim
-                        font.pointSize: 13
+                        color: Colors.accent
+                        font.pixelSize: 12
                         Layout.fillWidth: true
                         elide: Text.ElideRight
                     }
@@ -139,7 +172,7 @@ Item {
                             return bits.join("   •   ")
                         }
                         color: Colors.textDim
-                        font.pointSize: 12
+                        font.pixelSize: 11
                         Layout.fillWidth: true
                         elide: Text.ElideRight
                     }
@@ -147,22 +180,24 @@ Item {
                         visible: (meta.info.overview ?? "").length > 0
                         text: meta.info.overview ?? ""
                         color: Colors.overlayText
-                        font.pointSize: 12
+                        font.pixelSize: 12
                         wrapMode: Text.WordWrap
-                        maximumLineCount: 4
+                        maximumLineCount: 3
                         elide: Text.ElideRight
                         Layout.fillWidth: true
                         Layout.preferredHeight: implicitHeight
                     }
                     Row {
                         spacing: 6
+                        Layout.fillWidth: true
+                        Layout.topMargin: 4
                         visible: (meta.info.linkUrl ?? "").length > 0
-                        Button {
+                        MetaButton {
                             text: meta.info.linkUrl.indexOf("imdb.com") >= 0 ? qsTr("IMDb megnyitása")
                                                                              : qsTr("TMDb megnyitása")
                             onClicked: Qt.openUrlExternally(meta.info.linkUrl)
                         }
-                        Button {
+                        MetaButton {
                             text: qsTr("Bezárás")
                             onClicked: cardRoot.visible = false
                         }
@@ -182,6 +217,7 @@ Item {
                 spacing: 10
                 Text {
                     text: "\uF0C3"
+                    font.family: "Font Awesome 7 Free Solid"
                     font.pointSize: 18
                     color: Colors.accent
                 }
@@ -197,12 +233,12 @@ Item {
                     Text {
                         text: qsTr("Lokális fájlok info megjelenítéséhez adj meg ingyenes TMDB API kulcsot a beállításokban.")
                         color: Colors.textDim
-                        font.pointSize: 12
+                        font.pixelSize: 11
                         wrapMode: Text.WordWrap
                         Layout.fillWidth: true
                     }
                 }
-                Button {
+                MetaButton {
                     text: qsTr("Beállítások")
                     onClicked: cardRoot.openSettings()
                 }
@@ -216,12 +252,12 @@ Item {
             sourceComponent: Text {
                 text: qsTr("Ehhez a fájlhoz nem találtam metaadatot.")
                 color: Colors.textDim
-                font.pointSize: 13
+                font.pixelSize: 12
                 horizontalAlignment: Text.AlignHCenter
                 anchors.centerIn: parent
             }
         }
 
-        implicitHeight: 200
+        implicitHeight: 246
     }
 }

@@ -347,6 +347,7 @@ void MetadataInfo::buildFromTmdb(const QJsonObject &media,
             << out.value("subtitle").toString()
             << "year" << out.value("year").toInt()
             << "rating" << out.value("rating").toDouble()
+            << "poster" << out.value("posterUrl").toString()
             << "link" << out.value("linkUrl").toString();
     setInfo(std::move(out));
 }

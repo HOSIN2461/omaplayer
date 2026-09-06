@@ -1799,7 +1799,20 @@ ToggleRow { trLabel: qsTr("Audio-hasonlóság érzékelés (fejezet nélküli ep
                         placeholderText: qsTr("TMDB API kulcs (lokális fájlok)")
                         text: meta.tmdbKey
                         color: Colors.overlayText
+                        font.pixelSize: 11
+                        topPadding: 7
+                        bottomPadding: 7
+                        leftPadding: 10
+                        rightPadding: 10
+                        selectByMouse: true
                         onEditingFinished: meta.tmdbKey = text
+                        background: Rectangle {
+                            radius: 9
+                            color: "#26ffffff"
+                            border.color: keyFieldId.activeFocus ? Colors.borderGlow : Colors.border
+                            border.width: 1
+                        }
+                        placeholderTextColor: Colors.textDim
                         MouseArea {
                             anchors.fill: parent
                             acceptedButtons: Qt.LeftButton
@@ -1807,10 +1820,31 @@ ToggleRow { trLabel: qsTr("Audio-hasonlóság érzékelés (fejezet nélküli ep
                         }
                     }
                     Button {
-                        text: meta.tmdbKey.length > 0 ? qsTr("Kulcs mentés") : qsTr("Kulcs mentés")
+                        id: control
+                        text: qsTr("Kulcs mentés")
+                        font.pixelSize: 11
+                        implicitHeight: 28
+                        contentItem: Text {
+                            text: control.text
+                            color: control.pressed ? Colors.accent
+                                 : control.hovered ? Colors.overlayText
+                                 : Colors.textDim
+                            font.pixelSize: 11
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                            Behavior on color { ColorAnimation { duration: 110 } }
+                        }
                         onClicked: {
                             meta.tmdbKey = keyFieldId.text
                             keyFieldId.focus = false
+                        }
+                        background: Rectangle {
+                            radius: 14
+                            color: control.hovered || control.pressed ? Colors.hover : "#26ffffff"
+                            border.color: control.hovered ? Colors.borderGlow : Colors.border
+                            border.width: 1
+                            scale: control.pressed ? 0.93 : 1
+                            Behavior on scale { NumberAnimation { duration: 110; easing.type: Easing.OutCubic } }
                         }
                     }
                 }
