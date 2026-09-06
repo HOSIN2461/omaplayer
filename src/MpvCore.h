@@ -48,6 +48,31 @@ class MpvCore : public QObject
     Q_PROPERTY(QString skipPromptLabel READ skipPromptLabel NOTIFY skipPromptChanged)
     Q_PROPERTY(bool autoSkip READ autoSkip WRITE setAutoSkip NOTIFY autoSkipChanged)
 
+    // --- video settings -------------------------------------------------
+    Q_PROPERTY(QString videoAspect READ videoAspect WRITE setVideoAspect NOTIFY videoAspectChanged)
+    Q_PROPERTY(int videoRotate READ videoRotate WRITE setVideoRotate NOTIFY videoRotateChanged)
+    Q_PROPERTY(bool hwdecEnabled READ hwdecEnabled WRITE setHwdecEnabled NOTIFY hwdecEnabledChanged)
+    Q_PROPERTY(bool deinterlaceEnabled READ deinterlaceEnabled WRITE setDeinterlaceEnabled NOTIFY deinterlaceEnabledChanged)
+    Q_PROPERTY(bool hdrEnabled READ hdrEnabled WRITE setHdrEnabled NOTIFY hdrEnabledChanged)
+    Q_PROPERTY(double hue READ hue WRITE setHue NOTIFY hueChanged)
+    Q_PROPERTY(QString videoTrackLabel READ videoTrackLabel NOTIFY videoTrackLabelChanged)
+
+    // --- audio settings -------------------------------------------------
+    Q_PROPERTY(QVariantList audioEqGains READ audioEqGains NOTIFY audioEqGainsChanged)
+    Q_PROPERTY(int currentAudioId READ currentAudioId NOTIFY currentAudioTrackChanged)
+    Q_PROPERTY(QString audioTrackLabel READ audioTrackLabel NOTIFY currentAudioTrackChanged)
+
+    // --- subtitle settings ---------------------------------------------
+    Q_PROPERTY(double subDelay READ subDelay WRITE setSubDelay NOTIFY subDelayChanged)
+    Q_PROPERTY(double subPos READ subPos WRITE setSubPos NOTIFY subPosChanged)
+    Q_PROPERTY(double subFontSize READ subFontSize WRITE setSubFontSize NOTIFY subFontSizeChanged)
+    Q_PROPERTY(QString subFontFamily READ subFontFamily WRITE setSubFontFamily NOTIFY subFontFamilyChanged)
+    Q_PROPERTY(QString subColor READ subColor WRITE setSubColor NOTIFY subColorChanged)
+    Q_PROPERTY(QString subBorderColor READ subBorderColor WRITE setSubBorderColor NOTIFY subBorderColorChanged)
+    Q_PROPERTY(double subBorderSize READ subBorderSize WRITE setSubBorderSize NOTIFY subBorderSizeChanged)
+    Q_PROPERTY(QString subBackColor READ subBackColor WRITE setSubBackColor NOTIFY subBackColorChanged)
+    Q_PROPERTY(int currentSubtitleId READ currentSubtitleId NOTIFY currentSubtitleTrackChanged)
+
 public:
     // The QML side instantiates the type (Main.qml holds one as `mpv`), and the
     // renderer reaches the same instance through here. The constructor records
@@ -73,6 +98,29 @@ public:
     double gamma() const { return m_gamma; }
     double subScale() const { return m_subScale; }
     double audioDelay() const { return m_audioDelay; }
+
+    QString videoAspect() const { return m_videoAspect; }
+    int videoRotate() const { return m_videoRotate; }
+    bool hwdecEnabled() const { return m_hwdecEnabled; }
+    bool deinterlaceEnabled() const { return m_deinterlaceEnabled; }
+    bool hdrEnabled() const { return m_hdrEnabled; }
+    double hue() const { return m_hue; }
+    QString videoTrackLabel() const { return m_videoTrackLabel; }
+
+    QVariantList audioEqGains() const { return m_audioEqGains; }
+    int currentAudioId() const { return m_currentAudioId; }
+    QString audioTrackLabel() const { return m_audioTrackLabel; }
+
+    double subDelay() const { return m_subDelay; }
+    double subPos() const { return m_subPos; }
+    double subFontSize() const { return m_subFontSize; }
+    QString subFontFamily() const { return m_subFontFamily; }
+    QString subColor() const { return m_subColor; }
+    QString subBorderColor() const { return m_subBorderColor; }
+    double subBorderSize() const { return m_subBorderSize; }
+    QString subBackColor() const { return m_subBackColor; }
+    int currentSubtitleId() const { return m_currentSubtitleId; }
+
     bool skipPromptVisible() const { return m_skipPromptVisible; }
     QString skipPromptLabel() const { return m_skipPromptLabel; }
     bool autoSkip() const { return m_autoSkip; }
@@ -117,6 +165,40 @@ public:
     void setGamma(double value);
     void setSubScale(double value);
     void setAudioDelay(double value);
+    // --- video in/out ----------------------------------------------------
+    void setVideoAspect(const QString &aspect);
+    Q_INVOKABLE void setVideoCropAspect(const QString &aspect);
+    Q_INVOKABLE void setCustomVideoCrop(int w, int h);
+    Q_INVOKABLE void clearVideoCrop();
+    void setVideoRotate(int deg);
+    void setHwdecEnabled(bool on);
+    void setDeinterlaceEnabled(bool on);
+    void setHdrEnabled(bool on);
+    void setHue(double value);
+
+    // --- audio -----------------------------------------------------------
+    Q_INVOKABLE QVariantList audioTracks();
+    Q_INVOKABLE void setAudioTrack(int id);
+    Q_INVOKABLE void applyAudioEq();
+    Q_INVOKABLE void setAudioEqBand(int index, double gain);
+    Q_INVOKABLE void resetAudioEq();
+    Q_INVOKABLE void loadExternalAudio(const QString &path);
+    void setAudioEqGains(const QVariantList &gains);
+
+    // --- subtitles -------------------------------------------------------
+    Q_INVOKABLE QVariantList subtitleTracks();
+    Q_INVOKABLE void setSubtitleTrack(int id);
+    void setSubDelay(double value);
+    void setSubPos(double value);
+    void setSubFontSize(double value);
+    void setSubFontFamily(const QString &family);
+    void setSubColor(const QString &color);
+    void setSubBorderColor(const QString &color);
+    void setSubBorderSize(double value);
+    void setSubBackColor(const QString &color);
+    Q_INVOKABLE void setSubtitleColor(const QString &color);
+    Q_INVOKABLE void loadExternalSubtitle(const QString &path);
+    void refreshTracks();
 
     // Renderer-facing API (called on the Qt Quick render thread).
     mpv_render_context *renderContext();
@@ -153,6 +235,34 @@ private:
     QString m_skipPromptLabel;
     QTimer *m_skipTimer = nullptr;
 
+    void buildAudioEqFilter();
+    QTimer *m_eqTimer = nullptr;
+    void refreshVideoLabel();
+    void setCurrentAudioId(int id);
+    void setCurrentSubtitleId(int id);
+    void readOptions();
+    QVariantList m_audioEqGains = QVariantList() << 0.0 << 0.0 << 0.0 << 0.0 << 0.0
+                                                 << 0.0 << 0.0 << 0.0 << 0.0 << 0.0;
+
+    QString m_videoAspect = QStringLiteral("no");
+    int m_videoRotate = 0;
+    bool m_hwdecEnabled = true;
+    bool m_deinterlaceEnabled = false;
+    bool m_hdrEnabled = true;
+    double m_hue = 0.0;
+    QString m_videoTrackLabel;
+    int m_currentAudioId = -1;
+    QString m_audioTrackLabel;
+    int m_currentSubtitleId = -1;
+    double m_subDelay = 0.0;
+    double m_subPos = 100.0;
+    double m_subFontSize = 55.0;
+    QString m_subFontFamily = QStringLiteral("Sans");
+    QString m_subColor = QStringLiteral("#FFFFFFFF");
+    QString m_subBorderColor = QStringLiteral("#FF000000");
+    double m_subBorderSize = 3.0;
+    QString m_subBackColor = QStringLiteral("#80000000");
+
 signals:
     void playingChanged(bool playing);
     void positionChanged(double position);
@@ -172,6 +282,26 @@ signals:
     void currentIndexChanged(int index);
     void skipPromptChanged();
     void autoSkipChanged(bool autoSkip);
+
+    // --- video/audio/subtitle signals -------------------------------------
+    void videoAspectChanged();
+    void videoRotateChanged();
+    void hwdecEnabledChanged();
+    void deinterlaceEnabledChanged();
+    void hdrEnabledChanged();
+    void hueChanged();
+    void videoTrackLabelChanged();
+    void audioEqGainsChanged();
+    void currentAudioTrackChanged();
+    void currentSubtitleTrackChanged();
+    void subDelayChanged();
+    void subPosChanged();
+    void subFontSizeChanged();
+    void subFontFamilyChanged();
+    void subColorChanged();
+    void subBorderColorChanged();
+    void subBorderSizeChanged();
+    void subBackColorChanged();
 
 public:
     static void wakeupCallback(void *context);

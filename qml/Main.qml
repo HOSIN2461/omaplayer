@@ -236,6 +236,213 @@ ApplicationWindow {
         }
     }
 
+    // A labelled on/off pill used all over the settings panes.
+    component ToggleRow: RowLayout {
+        id: tr
+        property string trLabel: ""
+        property bool trValue: false
+        property var onToggled: null
+
+        Text {
+            text: tr.trLabel
+            color: Colors.overlayText
+            font.pixelSize: 12
+            Layout.fillWidth: true
+        }
+        Rectangle {
+            id: trPill
+            Layout.preferredWidth: 58
+            Layout.preferredHeight: 26
+            radius: 13
+            color: tr.trValue ? Colors.accent : Colors.hover
+            Behavior on color { ColorAnimation { duration: 100 } }
+            Text {
+                anchors.centerIn: parent
+                text: tr.trValue ? qsTr("Be") : qsTr("Ki")
+                font.pixelSize: 12
+                font.weight: Font.DemiBold
+                color: tr.trValue ? "#0b0b0e" : Colors.textDim
+            }
+            MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                onClicked: if (tr.onToggled) tr.onToggled(!tr.trValue)
+            }
+        }
+    }
+
+    // A horizontal row of selectable pill buttons (aspect, crop, rotation…).
+    component SegmentRow: Row {
+        id: seg
+        property var segItems: []
+        property var segCurrent: ""
+        property var onPick: null
+        spacing: 4
+
+        Repeater {
+            model: seg.segItems
+            Rectangle {
+                required property var modelData
+                height: 24
+                radius: 12
+                width: segItemWidth(modelData.label)
+                color: (seg.segCurrent === modelData.value)
+                       ? Colors.accent : (segHover.containsMouse ? Colors.hover : "transparent")
+                Behavior on color { ColorAnimation { duration: 90 } }
+                Text {
+                    anchors.centerIn: parent
+                    text: modelData.label
+                    font.pixelSize: 11
+                    color: (seg.segCurrent === modelData.value) ? "#0b0b0e" : Colors.textDim
+                }
+                MouseArea {
+                    id: segHover
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    onClicked: if (seg.onPick) seg.onPick(modelData.value)
+                }
+            }
+        }
+
+        function segItemWidth(label) {
+            return Math.min(74, Math.max(34, label.length * 8 + 18))
+        }
+    }
+
+    // A section header inside the settings panes.
+    component SectionLabel: Text {
+        font.pixelSize: 11
+        font.weight: Font.DemiBold
+        color: Colors.accent
+    }
+
+    // A track/subtitle dropdown: a compact list of selectable entries.
+    component TrackPicker: Column {
+        id: tp
+        property string tpLabel: ""
+        property var tpModel: []
+        property int tpCurrentId: -1
+        property var onPick: null
+        property bool tpOpen: false
+        property int itemHeight: 26
+        spacing: 5
+        width: parent ? parent.width : 0
+
+        Row {
+            width: parent.width
+            Text {
+                text: tp.tpLabel
+                color: Colors.overlayText
+                font.pixelSize: 12
+                Layout.fillWidth: true
+                width: parent.width - 90
+            }
+            Text {
+                text: tp.currentLabel()
+                color: Colors.textDim
+                font.pixelSize: 12
+                anchors.right: parent.right
+                elide: Text.ElideRight
+                width: 110
+                horizontalAlignment: Text.AlignRight
+            }
+        }
+
+        Column {
+            width: parent.width
+            spacing: 3
+            visible: tp.tpOpen
+            Repeater {
+                model: tp.tpModel
+                Rectangle {
+                    required property var modelData
+                    height: tp.itemHeight
+                    radius: 6
+                    width: parent ? parent.width : 0
+                    color: (tp.tpCurrentId === modelData.id)
+                           ? Colors.selection : (rowHover.containsMouse ? Colors.hover : "transparent")
+                    Row {
+                        anchors.fill: parent
+                        anchors.leftMargin: 10
+                        anchors.rightMargin: 6
+                        spacing: 6
+                        Text {
+                            text: modelData.selected ? "\uF00C" : "  "
+                            color: Colors.accent
+                            font.pixelSize: 11
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                        Text {
+                            text: modelData.title
+                            color: (tp.tpCurrentId === modelData.id) ? Colors.overlayText : Colors.textDim
+                            font.pixelSize: 11
+                            elide: Text.ElideMiddle
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: parent.width
+                        }
+                    }
+                    MouseArea {
+                        id: rowHover
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: {
+                            if (tp.onPick) tp.onPick(modelData.id)
+                            tp.tpOpen = false
+                        }
+                    }
+                }
+            }
+        }
+
+        function currentLabel() {
+            for (var i = 0; i < tp.tpModel.length; i++)
+                if (tp.tpModel[i].id === tp.tpCurrentId)
+                    return tp.tpModel[i].title
+            return "--"
+        }
+    }
+
+    // A row of colour swatches; tapping one reports its #AARRGGBB. Active
+    // swatch gets an accent ring so the current value is visibly selected.
+    component ColorSwatches: Row {
+        id: sw
+        property string selected: "#FFFFFFFF"
+        property var onPick: null
+
+        property var palette: [
+            { c: "#FFFFFFFF" },
+            { c: "#FFFFE900" },
+            { c: "#FF000000" },
+            { c: "#FF4ea1ff" },
+            { c: "#FFFF0000" },
+            { c: "#FF00FF00" },
+            { c: "#FF00FFFF" },
+            { c: "#FFFF00FF" },
+            { c: "#FF808080" }
+        ]
+
+        Repeater {
+            model: sw.palette
+            Rectangle {
+                required property var modelData
+                width: 22
+                height: 22
+                radius: width / 2
+                color: modelData.c
+                border.color: (sw.selected === modelData.c) ? Colors.accent : Colors.border
+                border.width: (sw.selected === modelData.c) ? 3 : 1
+                scale: swMous.containsMouse ? 1.15 : 1
+                Behavior on scale { NumberAnimation { duration: 90 } }
+                MouseArea {
+                    id: swMous
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    onClicked: if (sw.onPick) sw.onPick(modelData.c)
+                }
+            }
+        }
+    }
+
     // Draggable edges/corners for the floating window. Prefers the compositor
     // interaction (startSystemResize) and falls back to manual resizing.
     component ResizeGrip: MouseArea {
@@ -608,6 +815,32 @@ ApplicationWindow {
         onAccepted: {
             mpv.appendToPlaylist(selectedFiles)
             playlistPanel.refresh()
+        }
+    }
+
+    // --- external audio / subtitle pickers -------------------------------
+    FileDialog {
+        id: externalAudioDialog
+        title: qsTr("Külső hanglejátszás megnyitása")
+        fileMode: FileDialog.OpenFile
+        nameFilters: [
+            qsTr("Hangfájlok (%1)").arg("*.mp3 *.flac *.opus *.ogg *.wav *.aac *.m4a *.ac3"),
+            qsTr("Minden fájl (*)")
+        ]
+        onAccepted: mpv.loadExternalAudio(selectedFile)
+    }
+
+    FileDialog {
+        id: externalSubtitleDialog
+        title: qsTr("Külső felirat megnyitása")
+        fileMode: FileDialog.OpenFile
+        nameFilters: [
+            qsTr("Feliratok (%1)").arg("*.srt *.ass *.ssa *.vtt *.sub *.sup"),
+            qsTr("Minden fájl (*)")
+        ]
+        onAccepted: {
+            mpv.loadExternalSubtitle(selectedFile)
+            settingsMenu.refreshSubTracks()
         }
     }
 
@@ -1142,8 +1375,42 @@ ApplicationWindow {
         // Plain in-window panel — see playlistPanel: no native popup surface,
         // keyboard focus (and G/L/Esc) stay on the main window.
 
-        function open() { visible = true }
+        property int tabIndex: 0
+        property string cropAspect: ""
+        property bool customCropOpen: false
+        property var audioTracks: []
+        property var subTracks: []
+        property var eqFreqs: ["31","62","125","250","500","1k","2k","4k","8k","16k"]
+
+        function open() {
+            refreshAudioTracks()
+            refreshSubTracks()
+            visible = true
+        }
         function close() { visible = false }
+
+        function pickCrop(v) {
+            if (v === "custom") {
+                customCropOpen = !customCropOpen
+                return
+            }
+            customCropOpen = false
+            cropAspect = v
+            if (v === "") {
+                mpv.clearVideoCrop()
+            } else {
+                mpv.setVideoCropAspect(v)
+            }
+        }
+
+        function refreshAudioTracks() { audioTracks = mpv.audioTracks() }
+        function refreshSubTracks() { subTracks = mpv.subtitleTracks() }
+        // Keep the track pickers in sync while the drawer is open.
+        Connections {
+            target: mpv
+            function onCurrentAudioTrackChanged() { if (settingsMenu.visible) settingsMenu.refreshAudioTracks() }
+            function onCurrentSubtitleTrackChanged() { if (settingsMenu.visible) settingsMenu.refreshSubTracks() }
+        }
 
         Rectangle {
             anchors.fill: parent
@@ -1185,35 +1452,193 @@ ApplicationWindow {
                 }
             }
 
+            // --- tab bar --------------------------------------------------
+            Row {
+                Layout.fillWidth: true
+                spacing: 4
+
+                Repeater {
+                    model: [
+                        qsTr("Videó"),
+                        qsTr("Hang"),
+                        qsTr("Felirat")
+                    ]
+                    Rectangle {
+                        required property int index
+                        required property string modelData
+                        height: 26
+                        radius: 6
+                        width: settingsMenu.width / 3 - 4
+                        color: (settingsMenu.tabIndex === index)
+                               ? Colors.accent : (tabHover.containsMouse ? Colors.hover : "transparent")
+                        Behavior on color { ColorAnimation { duration: 90 } }
+                        Text {
+                            anchors.centerIn: parent
+                            text: modelData
+                            font.pixelSize: 12
+                            font.weight: Font.DemiBold
+                            color: (settingsMenu.tabIndex === index) ? "#0b0b0e" : Colors.textDim
+                        }
+                        MouseArea {
+                            id: tabHover
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            onClicked: settingsMenu.tabIndex = index
+                        }
+                    }
+                }
+            }
+
+            // --- video tab -----------------------------------------------
             Flickable {
-                id: settingsScroll
+                id: videoScroll
+                visible: settingsMenu.tabIndex === 0
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
-                contentWidth: settingsCol.implicitWidth
-                contentHeight: settingsCol.implicitHeight
+                contentWidth: videoCol.width
+                contentHeight: videoCol.implicitHeight
 
                 ColumnLayout {
-                    id: settingsCol
-                    width: settingsScroll.width
-                    spacing: 9
+                    id: videoCol
+                    width: videoScroll.width
+                    spacing: 8
 
+                    SectionLabel { text: qsTr("Videosáv") }
                     Text {
-                        text: qsTr("Lejátszás")
-                        font.pixelSize: 11
-                        font.weight: Font.DemiBold
-                        color: Colors.accent
+                        text: mpv.videoTrackLabel.length > 0
+                              ? mpv.videoTrackLabel : qsTr("—")
+                        color: Colors.textDim
+                        font.pixelSize: 12
+                        Layout.fillWidth: true
                     }
+
+                    SectionLabel { text: qsTr("Képarány") }
+                    SegmentRow {
+                        Layout.fillWidth: true
+                        segItems: [
+                            { label: qsTr("Alap"), value: "no" },
+                            { label: "4:3", value: "4:3" },
+                            { label: "16:9", value: "16:9" },
+                            { label: "16:10", value: "16:10" },
+                            { label: "21:9", value: "21:9" },
+                            { label: "5:4", value: "5:4" }
+                        ]
+                        segCurrent: mpv.videoAspect
+                        onPick: v => mpv.setVideoAspect(v)
+                    }
+
+                    SectionLabel { text: qsTr("Körbevágás") }
+                    SegmentRow {
+                        Layout.fillWidth: true
+                        segItems: [
+                            { label: qsTr("Nincs"), value: "" },
+                            { label: "4:3", value: "4:3" },
+                            { label: "16:9", value: "16:9" },
+                            { label: "16:10", value: "16:10" },
+                            { label: "21:9", value: "21:9" },
+                            { label: "5:4", value: "5:4" },
+                            { label: qsTr("Egyéni"), value: "custom" }
+                        ]
+                        segCurrent: settingsMenu.cropAspect
+                        onPick: v => settingsMenu.pickCrop(v)
+                    }
+
+                    Row {
+                        visible: settingsMenu.customCropOpen
+                        Layout.fillWidth: true
+                        spacing: 6
+
+                        TextField {
+                            id: cropWField
+                            Layout.preferredWidth: 90
+                            placeholderText: qsTr("Szélesség")
+                            placeholderTextColor: Colors.textDim
+                            color: Colors.overlayText
+                            font.pixelSize: 12
+                            topPadding: 6
+                            bottomPadding: 6
+                            inputMask: "999999"
+                            background: Rectangle {
+                                radius: 7
+                                color: Colors.chrome
+                                border.color: cropWField.activeFocus ? Colors.accent : Colors.border
+                            }
+                        }
+                        TextField {
+                            id: cropHField
+                            Layout.preferredWidth: 90
+                            placeholderText: qsTr("Magasság")
+                            placeholderTextColor: Colors.textDim
+                            color: Colors.overlayText
+                            font.pixelSize: 12
+                            topPadding: 6
+                            bottomPadding: 6
+                            inputMask: "999999"
+                            background: Rectangle {
+                                radius: 7
+                                color: Colors.chrome
+                                border.color: cropHField.activeFocus ? Colors.accent : Colors.border
+                            }
+                        }
+                        Item { Layout.fillWidth: true }
+                        Rectangle {
+                            id: customCropBtn
+                            Layout.preferredWidth: 76
+                            Layout.preferredHeight: 28
+                            radius: 14
+                            color: customCropHover.containsMouse || customCropHover.pressed
+                                   ? Colors.accent : Colors.accent
+                            Text {
+                                anchors.centerIn: parent
+                                text: qsTr("Vágás")
+                                font.pixelSize: 12
+                                font.weight: Font.DemiBold
+                                color: "#0b0b0e"
+                            }
+                            MouseArea {
+                                id: customCropHover
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                onClicked: {
+                                    const w = parseInt(cropWField.text, 10)
+                                    const h = parseInt(cropHField.text, 10)
+                                    if (w > 0 && h > 0) {
+                                        mpv.setCustomVideoCrop(w, h)
+                                        settingsMenu.cropAspect = "custom"
+                                        settingsMenu.customCropOpen = false
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    SectionLabel { text: qsTr("Elforgatás") }
+                    SegmentRow {
+                        Layout.fillWidth: true
+                        segItems: [
+                            { label: "0°", value: 0 },
+                            { label: "90°", value: 90 },
+                            { label: "180°", value: 180 },
+                            { label: "270°", value: 270 }
+                        ]
+                        segCurrent: mpv.videoRotate
+                        onPick: v => mpv.videoRotate = v
+                    }
+
+                    SectionLabel { text: qsTr("Lejátszás") }
                     ValueSlider { vsLabel: qsTr("Sebesség"); vsMin: 25; vsMax: 400; vsStep: 5;
                                   vsInteger: true; vsValue: Math.round(mpv.speed * 100);
                                   onChanged: v => mpv.speed = v / 100 }
 
-                    Text {
-                        text: qsTr("Videó színek")
-                        font.pixelSize: 11
-                        font.weight: Font.DemiBold
-                        color: Colors.accent
-                    }
+                    ToggleRow { trLabel: qsTr("Hardveres dekódolás"); trValue: mpv.hwdecEnabled;
+                                onToggled: v => mpv.hwdecEnabled = v }
+                    ToggleRow { trLabel: qsTr("Váltott soros szűrő"); trValue: mpv.deinterlaceEnabled;
+                                onToggled: v => mpv.deinterlaceEnabled = v }
+                    ToggleRow { trLabel: qsTr("HDR"); trValue: mpv.hdrEnabled;
+                                onToggled: v => mpv.hdrEnabled = v }
+
+                    SectionLabel { text: qsTr("Videó színek") }
                     ValueSlider { vsLabel: qsTr("Fényerő");     vsValue: mpv.brightness;
                                   onChanged: v => mpv.brightness = v }
                     ValueSlider { vsLabel: qsTr("Kontraszt");   vsValue: mpv.contrast;
@@ -1222,72 +1647,26 @@ ApplicationWindow {
                                   onChanged: v => mpv.saturation = v }
                     ValueSlider { vsLabel: qsTr("Gamma");       vsValue: mpv.gamma;
                                   onChanged: v => mpv.gamma = v }
-
-                    Text {
-                        text: qsTr("Feliratok")
-                        font.pixelSize: 11
-                        font.weight: Font.DemiBold
-                        color: Colors.accent
-                    }
-                    RowLayout {
-                        Text {
-                            text: qsTr("Megjelenítés")
-                            color: Colors.overlayText
-                            font.pixelSize: 12
-                        }
-                        Item { Layout.fillWidth: true }
-                        Rectangle {
-                            id: subToggle
-                            Layout.preferredWidth: 58
-                            Layout.preferredHeight: 26
-                            radius: 13
-                            color: mpv.subtitlesVisible ? Colors.accent : Colors.hover
-                            Behavior on color { ColorAnimation { duration: 100 } }
-                            Text {
-                                anchors.centerIn: parent
-                                text: mpv.subtitlesVisible ? qsTr("Be") : qsTr("Ki")
-                                font.pixelSize: 12
-                                font.weight: Font.DemiBold
-                                color: mpv.subtitlesVisible ? "#0b0b0e" : Colors.textDim
-                            }
-                            MouseArea {
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                onClicked: mpv.toggleSubtitles()
-                            }
-                        }
-                    }
-                    ValueSlider { vsLabel: qsTr("Betűméret"); vsMin: 50; vsMax: 200; vsStep: 5;
-                                  vsInteger: true; vsValue: Math.round(mpv.subScale * 100);
-                                  onChanged: v => mpv.subScale = v / 100 }
-
-                    Text {
-                        text: qsTr("Hang")
-                        font.pixelSize: 11
-                        font.weight: Font.DemiBold
-                        color: Colors.accent
-                    }
-                    ValueSlider { vsLabel: qsTr("Késleltetés"); vsMin: -2000; vsMax: 2000; vsStep: 100;
-                                  vsInteger: true; vsValue: Math.round(mpv.audioDelay * 1000);
-                                  onChanged: v => mpv.audioDelay = v / 1000 }
+                    ValueSlider { vsLabel: qsTr("Színárnyalat"); vsValue: mpv.hue;
+                                  onChanged: v => mpv.hue = v }
 
                     RowLayout {
-                        Layout.topMargin: 4
+                        Layout.topMargin: 2
                         Item { Layout.fillWidth: true }
                         Rectangle {
-                            id: resetBtn
-                            Layout.preferredWidth: 120
-                            Layout.preferredHeight: 30
-                            radius: 15
-                            color: resetMouse.containsMouse ? Colors.hover : "transparent"
+                            id: videoResetBtn
+                            Layout.preferredWidth: 140
+                            Layout.preferredHeight: 28
+                            radius: 14
+                            color: videoResetHover.containsMouse ? Colors.hover : "transparent"
                             Text {
                                 anchors.centerIn: parent
-                                text: qsTr("Alaphelyzet")
+                                text: qsTr("Színek alaphelyzet")
                                 font.pixelSize: 12
-                                color: resetMouse.containsMouse ? Colors.overlayText : Colors.textDim
+                                color: videoResetHover.containsMouse ? Colors.overlayText : Colors.textDim
                             }
                             MouseArea {
-                                id: resetMouse
+                                id: videoResetHover
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 onClicked: {
@@ -1296,12 +1675,349 @@ ApplicationWindow {
                                     mpv.contrast = 0
                                     mpv.saturation = 0
                                     mpv.gamma = 0
-                                    mpv.subScale = 1.0
-                                    mpv.audioDelay = 0
+                                    mpv.hue = 0
                                 }
                             }
                         }
                     }
+
+                    Item { height: 8 }
+                }
+            }
+
+            // --- audio tab -----------------------------------------------
+            Flickable {
+                id: audioScroll
+                visible: settingsMenu.tabIndex === 1
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                contentWidth: audioCol.width
+                contentHeight: audioCol.implicitHeight
+
+                ColumnLayout {
+                    id: audioCol
+                    width: audioScroll.width
+                    spacing: 8
+
+                    SectionLabel { text: qsTr("Hangsáv") }
+                    TrackPicker {
+                        id: audioTrackPicker
+                        tpLabel: qsTr("Hangsáv")
+                        tpModel: settingsMenu.audioTracks
+                        tpCurrentId: mpv.currentAudioId
+                        onPick: id => {
+                            mpv.setAudioTrack(id)
+                            settingsMenu.refreshAudioTracks()
+                        }
+                    }
+
+                    RowLayout {
+                        Text {
+                            text: qsTr("Külső hang tallózó")
+                            color: Colors.overlayText
+                            font.pixelSize: 12
+                            Layout.fillWidth: true
+                        }
+                        Rectangle {
+                            id: pickAudioBtn
+                            Layout.preferredWidth: 88
+                            Layout.preferredHeight: 28
+                            radius: 14
+                            color: pickAudioHover.containsMouse ? Colors.hover : "transparent"
+                            Text {
+                                anchors.centerIn: parent
+                                text: qsTr("Tallózás")
+                                font.pixelSize: 12
+                                color: pickAudioHover.containsMouse ? Colors.overlayText : Colors.textDim
+                            }
+                            MouseArea {
+                                id: pickAudioHover
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                onClicked: externalAudioDialog.open()
+                            }
+                        }
+                    }
+                    Text {
+                        visible: mpv.audioTrackLabel.length > 0
+                        text: mpv.audioTrackLabel
+                        color: Colors.textDim
+                        font.pixelSize: 11
+                    }
+
+                    SectionLabel { text: qsTr("Hangkésleltetés") }
+                    ValueSlider { vsLabel: qsTr("Késleltetés"); vsMin: -2000; vsMax: 2000; vsStep: 100;
+                                  vsInteger: true; vsValue: Math.round(mpv.audioDelay * 1000);
+                                  onChanged: v => mpv.audioDelay = v / 1000 }
+
+                    SectionLabel { text: qsTr("Hangszínszabályzó") }
+                    Repeater {
+                        model: 10
+                        Row {
+                            required property int index
+                            width: audioScroll.width - 24
+                            height: 26
+                            spacing: 8
+                            Text {
+                                text: settingsMenu.eqFreqs[index]
+                                width: 34
+                                color: Colors.textDim
+                                font.pixelSize: 11
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                            Slider {
+                                id: eqSlider
+                                width: parent.width - 34 - 46
+                                height: 24
+                                from: -20
+                                to: 20
+                                stepSize: 1
+                                value: mpv.audioEqGains.length > index ? mpv.audioEqGains[index] : 0
+                                onMoved: mpv.setAudioEqBand(index, value)
+
+                                background: Item {
+                                    implicitHeight: 16
+                                    Rectangle {
+                                        anchors.fill: parent
+                                        height: 4
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        radius: 2
+                                        color: Colors.track
+                                    }
+                                    Rectangle {
+                                        width: eqSlider.visualPosition * parent.width
+                                        anchors { left: parent.left; verticalCenter: parent.verticalCenter }
+                                        height: 4
+                                        radius: 2
+                                        color: Colors.accent
+                                    }
+                                }
+                                handle: Rectangle {
+                                    x: eqSlider.leftPadding + eqSlider.visualPosition * (eqSlider.availableWidth - width)
+                                    y: eqSlider.topPadding + (eqSlider.availableHeight - height) / 2
+                                    width: 12
+                                    height: 12
+                                    radius: 6
+                                    color: eqSlider.hovered || eqSlider.dragging ? "#ffffff" : Colors.hover
+                                    border.color: Colors.accent
+                                    border.width: 2
+                                }
+                            }
+                            Text {
+                                text: (mpv.audioEqGains.length > index ? mpv.audioEqGains[index] : 0).toFixed(0) + " dB"
+                                width: 32
+                                color: Colors.textDim
+                                font.pixelSize: 10
+                                horizontalAlignment: Text.AlignRight
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                        }
+                    }
+                    RowLayout {
+                        Layout.topMargin: 2
+                        Item { Layout.fillWidth: true }
+                        Rectangle {
+                            id: eqResetBtn
+                            Layout.preferredWidth: 120
+                            Layout.preferredHeight: 28
+                            radius: 14
+                            color: eqResetHover.containsMouse ? Colors.hover : "transparent"
+                            Text {
+                                anchors.centerIn: parent
+                                text: qsTr("EQ alaphelyzet")
+                                font.pixelSize: 12
+                                color: eqResetHover.containsMouse ? Colors.overlayText : Colors.textDim
+                            }
+                            MouseArea {
+                                id: eqResetHover
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                onClicked: mpv.resetAudioEq()
+                            }
+                        }
+                    }
+
+                    Item { height: 8 }
+                }
+            }
+
+            // --- subtitle tab --------------------------------------------
+            Flickable {
+                id: subScroll
+                visible: settingsMenu.tabIndex === 2
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                contentWidth: subCol.width
+                contentHeight: subCol.implicitHeight
+
+                ColumnLayout {
+                    id: subCol
+                    width: subScroll.width
+                    spacing: 8
+
+                    ToggleRow { trLabel: qsTr("Felirat megjelenítése"); trValue: mpv.subtitlesVisible;
+                                onToggled: v => mpv.toggleSubtitles() }
+
+                    SectionLabel { text: qsTr("Felirat") }
+                    TrackPicker {
+                        id: subTrackPicker
+                        tpLabel: qsTr("Felirat")
+                        tpModel: settingsMenu.subTracks
+                        tpCurrentId: mpv.currentSubtitleId
+                        onPick: id => {
+                            mpv.setSubtitleTrack(id)
+                            settingsMenu.refreshSubTracks()
+                        }
+                    }
+
+                    RowLayout {
+                        Text {
+                            text: qsTr("Külső felirat tallózó")
+                            color: Colors.overlayText
+                            font.pixelSize: 12
+                            Layout.fillWidth: true
+                        }
+                        Rectangle {
+                            id: pickSubBtn
+                            Layout.preferredWidth: 88
+                            Layout.preferredHeight: 28
+                            radius: 14
+                            color: pickSubHover.containsMouse ? Colors.hover : "transparent"
+                            Text {
+                                anchors.centerIn: parent
+                                text: qsTr("Tallózás")
+                                font.pixelSize: 12
+                                color: pickSubHover.containsMouse ? Colors.overlayText : Colors.textDim
+                            }
+                            MouseArea {
+                                id: pickSubHover
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                onClicked: externalSubtitleDialog.open()
+                            }
+                        }
+                    }
+
+                    SectionLabel { text: qsTr("Időzítés és elhelyezés") }
+                    ValueSlider { vsLabel: qsTr("Késleltetés"); vsMin: -2000; vsMax: 2000; vsStep: 100;
+                                  vsInteger: true; vsValue: Math.round(mpv.subDelay * 1000);
+                                  onChanged: v => mpv.subDelay = v / 1000 }
+                    ValueSlider { vsLabel: qsTr("Pozíció"); vsMin: 30; vsMax: 150; vsStep: 1;
+                                  vsInteger: true; vsValue: Math.round(mpv.subPos);
+                                  onChanged: v => mpv.subPos = v }
+                    ValueSlider { vsLabel: qsTr("Nagyítás"); vsMin: 50; vsMax: 200; vsStep: 5;
+                                  vsInteger: true; vsValue: Math.round(mpv.subScale * 100);
+                                  onChanged: v => mpv.subScale = v / 100 }
+
+                    SectionLabel { text: qsTr("Szöveg stílus") }
+                    ValueSlider { vsLabel: qsTr("Betűméret"); vsMin: 25; vsMax: 200; vsStep: 1;
+                                  vsInteger: true; vsValue: Math.round(mpv.subFontSize);
+                                  onChanged: v => mpv.subFontSize = v }
+
+                    RowLayout {
+                        Text {
+                            text: qsTr("Betűtípus")
+                            color: Colors.overlayText
+                            font.pixelSize: 12
+                            Layout.fillWidth: true
+                        }
+                        TextField {
+                            id: fontField
+                            Layout.preferredWidth: 120
+                            text: mpv.subFontFamily
+                            color: Colors.overlayText
+                            font.pixelSize: 12
+                            topPadding: 5
+                            bottomPadding: 5
+                            leftPadding: 8
+                            rightPadding: 8
+                            background: Rectangle {
+                                radius: 7
+                                color: Colors.chrome
+                                border.color: fontField.activeFocus ? Colors.accent : Colors.border
+                            }
+                            onEditingFinished: mpv.subFontFamily = text
+                        }
+                        Rectangle {
+                            Layout.preferredWidth: 60
+                            Layout.preferredHeight: 26
+                            radius: 13
+                            color: fontResetHover.containsMouse ? Colors.hover : "transparent"
+                            Text {
+                                anchors.centerIn: parent
+                                text: qsTr("Alap")
+                                font.pixelSize: 11
+                                color: fontResetHover.containsMouse ? Colors.overlayText : Colors.textDim
+                            }
+                            MouseArea {
+                                id: fontResetHover
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                onClicked: mpv.subFontFamily = "Sans"
+                            }
+                        }
+                    }
+
+                    SectionLabel { text: qsTr("Szín") }
+                    ColorSwatches {
+                        Layout.fillWidth: true
+                        selected: mpv.subColor
+                        onPick: c => mpv.subColor = c
+                    }
+
+                    SectionLabel { text: qsTr("Keret") }
+                    ValueSlider { vsLabel: qsTr("Szélesség"); vsMin: 0; vsMax: 10; vsStep: 1;
+                                  vsInteger: true; vsValue: Math.round(mpv.subBorderSize);
+                                  onChanged: v => mpv.subBorderSize = v }
+                    ColorSwatches {
+                        Layout.fillWidth: true
+                        selected: mpv.subBorderColor
+                        onPick: c => mpv.subBorderColor = c
+                    }
+
+                    SectionLabel { text: qsTr("Háttér") }
+                    ColorSwatches {
+                        Layout.fillWidth: true
+                        selected: mpv.subBackColor
+                        onPick: c => mpv.subBackColor = c
+                    }
+
+                    RowLayout {
+                        Layout.topMargin: 4
+                        Item { Layout.fillWidth: true }
+                        Rectangle {
+                            id: subResetBtn
+                            Layout.preferredWidth: 120
+                            Layout.preferredHeight: 30
+                            radius: 15
+                            color: subResetHover.containsMouse ? Colors.hover : "transparent"
+                            Text {
+                                anchors.centerIn: parent
+                                text: qsTr("Alaphelyzet")
+                                font.pixelSize: 12
+                                color: subResetHover.containsMouse ? Colors.overlayText : Colors.textDim
+                            }
+                            MouseArea {
+                                id: subResetHover
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                onClicked: {
+                                    mpv.subDelay = 0
+                                    mpv.subPos = 100
+                                    mpv.subScale = 1.0
+                                    mpv.subFontSize = 55
+                                    mpv.subFontFamily = "Sans"
+                                    mpv.subColor = "#FFFFFFFF"
+                                    mpv.subBorderColor = "#FF000000"
+                                    mpv.subBorderSize = 3
+                                    mpv.subBackColor = "#80000000"
+                                }
+                            }
+                        }
+                    }
+
                     Item { height: 8 }
                 }
             }

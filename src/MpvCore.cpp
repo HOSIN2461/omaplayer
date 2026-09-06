@@ -17,6 +17,7 @@
 #include <functional>
 
 #include <cstring>
+#include <algorithm>
 namespace {
 
 // Qt Quick keeps a QOpenGLContext current on the render thread; the address
@@ -98,6 +99,17 @@ mpv_observe_property(m_handle, 0, "pause", MPV_FORMAT_FLAG);
     mpv_observe_property(m_handle, 0, "audio-delay", MPV_FORMAT_DOUBLE);
     mpv_observe_property(m_handle, 0, "playlist-pos", MPV_FORMAT_INT64);
 
+    mpv_observe_property(m_handle, 0, "track-list", MPV_FORMAT_NODE);
+    mpv_observe_property(m_handle, 0, "aid", MPV_FORMAT_INT64);
+    mpv_observe_property(m_handle, 0, "sid", MPV_FORMAT_INT64);
+    mpv_observe_property(m_handle, 0, "video-params", MPV_FORMAT_NODE);
+    mpv_observe_property(m_handle, 0, "video-rotate", MPV_FORMAT_INT64);
+    mpv_observe_property(m_handle, 0, "deinterlace", MPV_FORMAT_FLAG);
+    mpv_observe_property(m_handle, 0, "sub-pos", MPV_FORMAT_DOUBLE);
+    mpv_observe_property(m_handle, 0, "sub-delay", MPV_FORMAT_DOUBLE);
+    mpv_observe_property(m_handle, 0, "sub-font-size", MPV_FORMAT_DOUBLE);
+    mpv_observe_property(m_handle, 0, "hue", MPV_FORMAT_DOUBLE);
+
     mpv_set_wakeup_callback(m_handle, &MpvCore::wakeupCallback, this);
     mpv_request_log_messages(m_handle, "warn");
 
@@ -105,6 +117,13 @@ mpv_observe_property(m_handle, 0, "pause", MPV_FORMAT_FLAG);
     m_skipTimer->setSingleShot(true);
     m_skipTimer->setInterval(8000);
     connect(m_skipTimer, &QTimer::timeout, this, [this] { dismissSkipPrompt(); });
+
+    // Debounce EQ rebuilds: lavfi af rebuilds re-init the audio chain, so only
+    // apply after the user has stopped dragging a band for a moment.
+    m_eqTimer = new QTimer(this);
+    m_eqTimer->setSingleShot(true);
+    m_eqTimer->setInterval(220);
+    connect(m_eqTimer, &QTimer::timeout, this, [this] { buildAudioEqFilter(); });
 
     if (mpv_initialize(m_handle) < 0) {
         qWarning("mpv_initialize failed");
@@ -367,6 +386,50 @@ void MpvCore::handleWakeup()
             } else if (prop->format == MPV_FORMAT_INT64 && std::strcmp(name, "playlist-pos") == 0) {
                 if (prop->data)
                     Q_EMIT currentIndexChanged(static_cast<int>(*static_cast<long long *>(prop->data)));
+            } else if (prop->format == MPV_FORMAT_NODE && std::strcmp(name, "track-list") == 0) {
+                refreshTracks();
+            } else if (prop->format == MPV_FORMAT_INT64 && std::strcmp(name, "aid") == 0) {
+                if (prop->data)
+                    setCurrentAudioId(static_cast<int>(*static_cast<long long *>(prop->data)));
+            } else if (prop->format == MPV_FORMAT_INT64 && std::strcmp(name, "sid") == 0) {
+                if (prop->data)
+                    setCurrentSubtitleId(static_cast<int>(*static_cast<long long *>(prop->data)));
+            } else if (prop->format == MPV_FORMAT_NODE && std::strcmp(name, "video-params") == 0) {
+                // Recompute the live video label (resolution/codec).
+                refreshVideoLabel();
+            } else if (prop->format == MPV_FORMAT_INT64 && std::strcmp(name, "video-rotate") == 0) {
+                if (prop->data) {
+                    const int rot = static_cast<int>(*static_cast<long long *>(prop->data));
+                    if (rot != m_videoRotate) {
+                        m_videoRotate = rot;
+                        Q_EMIT videoRotateChanged();
+                    }
+                }
+            } else if (prop->format == MPV_FORMAT_FLAG && std::strcmp(name, "deinterlace") == 0) {
+                if (flag != m_deinterlaceEnabled) {
+                    m_deinterlaceEnabled = flag;
+                    Q_EMIT deinterlaceEnabledChanged();
+                }
+            } else if (prop->format == MPV_FORMAT_DOUBLE && std::strcmp(name, "sub-pos") == 0) {
+                if (value != m_subPos) {
+                    m_subPos = value;
+                    Q_EMIT subPosChanged();
+                }
+            } else if (prop->format == MPV_FORMAT_DOUBLE && std::strcmp(name, "sub-delay") == 0) {
+                if (value != m_subDelay) {
+                    m_subDelay = value;
+                    Q_EMIT subDelayChanged();
+                }
+            } else if (prop->format == MPV_FORMAT_DOUBLE && std::strcmp(name, "sub-font-size") == 0) {
+                if (value != m_subFontSize) {
+                    m_subFontSize = value;
+                    Q_EMIT subFontSizeChanged();
+                }
+            } else if (prop->format == MPV_FORMAT_DOUBLE && std::strcmp(name, "hue") == 0) {
+                if (value != m_hue) {
+                    m_hue = value;
+                    Q_EMIT hueChanged();
+                }
             }
             break;
         }
@@ -413,6 +476,7 @@ void MpvCore::open(const QString &location)
     const char *cmd[] = { "loadfile", bytes.constData(), nullptr };
     mpv_command(m_handle, cmd);
     mpv_set_property_string(m_handle, "pause", "no");
+    readOptions();
 }
 
 void MpvCore::play()
@@ -830,6 +894,7 @@ void MpvCore::openList(const QStringList &files)
         mpv_command(m_handle, cmd);
     }
     mpv_set_property_string(m_handle, "pause", "no");
+    readOptions();
 }
 
 void MpvCore::appendToPlaylist(const QStringList &files)
@@ -924,6 +989,605 @@ void MpvCore::setSaturation(double value) { setDoubleProperty(m_handle, "saturat
 void MpvCore::setGamma(double value) { setDoubleProperty(m_handle, "gamma", value); }
 void MpvCore::setSubScale(double value) { setDoubleProperty(m_handle, "sub-scale", value); }
 void MpvCore::setAudioDelay(double value) { setDoubleProperty(m_handle, "audio-delay", value); }
+
+namespace {
+void setStringProperty(mpv_handle *handle, const char *name, const QString &value)
+{
+    if (!handle)
+        return;
+    const QByteArray text = value.toUtf8();
+    mpv_set_property_string(handle, name, text.constData());
+}
+int mpvNodeInt(const mpv_node &entry, const char *key, int fallback = -1)
+{
+    if (entry.format != MPV_FORMAT_NODE_MAP)
+        return fallback;
+    for (int j = 0; j < entry.u.list->num; ++j) {
+        if (std::strcmp(entry.u.list->keys[j], key) == 0
+            && entry.u.list->values[j].format == MPV_FORMAT_INT64)
+            return static_cast<int>(entry.u.list->values[j].u.int64);
+    }
+    return fallback;
+}
+QString mpvNodeString(const mpv_node &entry, const char *key)
+{
+    if (entry.format != MPV_FORMAT_NODE_MAP)
+        return {};
+    for (int j = 0; j < entry.u.list->num; ++j) {
+        if (std::strcmp(entry.u.list->keys[j], key) == 0
+            && entry.u.list->values[j].format == MPV_FORMAT_STRING)
+            return QString::fromUtf8(entry.u.list->values[j].u.string);
+    }
+    return {};
+}
+double mpvNodeDouble(const mpv_node &entry, const char *key, double fallback = 0.0)
+{
+    if (entry.format != MPV_FORMAT_NODE_MAP)
+        return fallback;
+    for (int j = 0; j < entry.u.list->num; ++j) {
+        if (std::strcmp(entry.u.list->keys[j], key) == 0
+            && entry.u.list->values[j].format == MPV_FORMAT_DOUBLE)
+            return entry.u.list->values[j].u.double_;
+    }
+    return fallback;
+}
+bool mpvNodeInt64(mpv_handle *handle, const char *name, long long *out)
+{
+    return handle && mpv_get_property(handle, name, MPV_FORMAT_INT64, out) == 0;
+}
+bool mpvNodeStringOut(mpv_handle *handle, const char *name, QString *out)
+{
+    if (!handle)
+        return false;
+    char *str = nullptr;
+    if (mpv_get_property(handle, name, MPV_FORMAT_STRING, &str) != 0 || !str)
+        return false;
+    *out = QString::fromUtf8(str);
+    mpv_free(str);
+    return true;
+}
+} // namespace
+
+// Reads the current mpv option state into our mirrors the first time a file
+// loads (before any observe fires for the current value).
+void MpvCore::readOptions()
+{
+    if (!m_handle)
+        return;
+
+    QString aspect;
+    if (mpvNodeStringOut(m_handle, "video-aspect-override", &aspect))
+        m_videoAspect = aspect.isEmpty() ? QStringLiteral("no") : aspect;
+
+    long long rot = 0;
+    if (mpvNodeInt64(m_handle, "video-rotate", &rot))
+        m_videoRotate = static_cast<int>(rot);
+
+    char *hw = nullptr;
+    if (mpv_get_property(m_handle, "hwdec", MPV_FORMAT_STRING, &hw) == 0 && hw) {
+        m_hwdecEnabled = (QLatin1String(hw) != QLatin1String("no"));
+        mpv_free(hw);
+    }
+
+    int deint = 0;
+    if (mpv_get_property(m_handle, "deinterlace", MPV_FORMAT_FLAG, &deint) == 0)
+        m_deinterlaceEnabled = deint != 0;
+
+    char *tm = nullptr;
+    if (mpv_get_property(m_handle, "tone-mapping", MPV_FORMAT_STRING, &tm) == 0 && tm) {
+        m_hdrEnabled = (QLatin1String(tm) != QLatin1String("clip"));
+        mpv_free(tm);
+    }
+
+    long long aid = -1, sid = -1;
+    if (mpvNodeInt64(m_handle, "aid", &aid))
+        m_currentAudioId = static_cast<int>(aid);
+    if (mpvNodeInt64(m_handle, "sid", &sid))
+        m_currentSubtitleId = static_cast<int>(sid);
+
+    double subPos = 100, subDelay = 0, subFontSize = 55, hue = 0;
+    if (mpv_get_property(m_handle, "sub-pos", MPV_FORMAT_DOUBLE, &subPos) == 0)
+        m_subPos = subPos;
+    if (mpv_get_property(m_handle, "sub-delay", MPV_FORMAT_DOUBLE, &subDelay) == 0)
+        m_subDelay = subDelay;
+    if (mpv_get_property(m_handle, "sub-font-size", MPV_FORMAT_DOUBLE, &subFontSize) == 0)
+        m_subFontSize = subFontSize;
+    if (mpv_get_property(m_handle, "hue", MPV_FORMAT_DOUBLE, &hue) == 0)
+        m_hue = hue;
+
+    mpvNodeStringOut(m_handle, "sub-font", &m_subFontFamily);
+    mpvNodeStringOut(m_handle, "sub-color", &m_subColor);
+    mpvNodeStringOut(m_handle, "sub-border-color", &m_subBorderColor);
+    mpvNodeStringOut(m_handle, "sub-back-color", &m_subBackColor);
+    double subBorder = 3.0;
+    if (mpv_get_property(m_handle, "sub-border-size", MPV_FORMAT_DOUBLE, &subBorder) == 0)
+        m_subBorderSize = subBorder;
+
+    refreshVideoLabel();
+    refreshTracks();
+}
+
+void MpvCore::refreshVideoLabel()
+{
+    if (!m_handle) {
+        m_videoTrackLabel.clear();
+        Q_EMIT videoTrackLabelChanged();
+        return;
+    }
+    mpv_node node;
+    QString label;
+    if (mpv_get_property(m_handle, "video-params", MPV_FORMAT_NODE, &node) == 0) {
+        int w = mpvNodeInt(node, "w", 0);
+        int h = mpvNodeInt(node, "h", 0);
+        QString codec = mpvNodeString(node, "codec");
+        QString pixfmt = mpvNodeString(node, "pixelformat");
+        if (w > 0 && h > 0) {
+            label = QStringLiteral("%1×%2").arg(w).arg(h);
+            if (!codec.isEmpty())
+                label += QStringLiteral(" · %3").arg(codec);
+            if (!pixfmt.isEmpty())
+                label += QStringLiteral(" · %4").arg(pixfmt);
+        }
+        mpv_free_node_contents(&node);
+    }
+    if (label != m_videoTrackLabel) {
+        m_videoTrackLabel = label;
+        Q_EMIT videoTrackLabelChanged();
+    }
+}
+
+void MpvCore::refreshTracks()
+{
+    if (!m_handle)
+        return;
+
+    // Recompute the human-readable label of the currently selected audio track
+    // from the live track list (id/language/codec).
+    mpv_node root{};
+    QString label = m_audioTrackLabel;
+    if (mpv_get_property(m_handle, "track-list", MPV_FORMAT_NODE, &root) == 0) {
+        if (root.format == MPV_FORMAT_NODE_ARRAY) {
+            for (int i = 0; i < root.u.list->num; ++i) {
+                const mpv_node &entry = root.u.list->values[i];
+                if (entry.format != MPV_FORMAT_NODE_MAP)
+                    continue;
+                if (mpvNodeString(entry, "type") != QLatin1String("audio"))
+                    continue;
+                if (mpvNodeInt(entry, "selected", 0) != 1)
+                    continue;
+                const int id = mpvNodeInt(entry, "id", -1);
+                QString title = mpvNodeString(entry, "title");
+                QString lang = mpvNodeString(entry, "lang");
+                QString codec = mpvNodeString(entry, "codec");
+                if (lang.isEmpty() && title.isEmpty())
+                    title = tr("Hangsáv %1").arg(id);
+                label = title;
+                if (!lang.isEmpty())
+                    label += QStringLiteral(" [%1]").arg(lang.toUpper());
+                if (!codec.isEmpty() && codec != QLatin1String("unknown"))
+                    label += QStringLiteral(" · %2").arg(codec);
+                break;
+            }
+        }
+        mpv_free_node_contents(&root);
+    }
+
+    if (label != m_audioTrackLabel) {
+        m_audioTrackLabel = label;
+        Q_EMIT currentAudioTrackChanged();
+    }
+}
+
+void MpvCore::setCurrentAudioId(int id)
+{
+    if (id == m_currentAudioId)
+        return;
+    m_currentAudioId = id;
+    // Update the human-readable label from the live track list.
+    m_audioTrackLabel.clear();
+    Q_EMIT currentAudioTrackChanged();
+}
+
+void MpvCore::setCurrentSubtitleId(int id)
+{
+    if (id == m_currentSubtitleId)
+        return;
+    m_currentSubtitleId = id;
+    Q_EMIT currentSubtitleTrackChanged();
+}
+
+// --- video in/out -----------------------------------------------------
+
+void MpvCore::setVideoAspect(const QString &aspect)
+{
+    const QString v = aspect.isEmpty() ? QStringLiteral("no") : aspect;
+    if (v == m_videoAspect)
+        return;
+    m_videoAspect = v;
+    Q_EMIT videoAspectChanged();
+    if (m_handle) {
+        const QByteArray bytes = v.toUtf8();
+        mpv_set_property_string(m_handle, "video-aspect-override", bytes.constData());
+    }
+}
+
+void MpvCore::setVideoCropAspect(const QString &aspect)
+{
+    if (!m_handle)
+        return;
+    // video-crop needs concrete pixel dimensions; read the current frame and
+    // clip it to the largest centered rectangle matching the requested aspect.
+    mpv_node node;
+    int w = 0, h = 0;
+    if (mpv_get_property(m_handle, "video-params", MPV_FORMAT_NODE, &node) == 0) {
+        w = mpvNodeInt(node, "w", 0);
+        h = mpvNodeInt(node, "h", 0);
+        mpv_free_node_contents(&node);
+    }
+    if (w <= 0 || h <= 0)
+        return;
+
+    int num = 0, den = 0;
+    const QStringList parts = aspect.split(':');
+    if (parts.size() == 2) {
+        num = parts[0].toInt();
+        den = parts[1].toInt();
+    }
+    if (num <= 0 || den <= 0)
+        return;
+
+    int cw = w, ch = h;
+    if (w * den > h * num) {
+        // Wider than the target: crop the sides.
+        cw = h * num / den;
+    } else {
+        // Taller than the target: crop the top/bottom.
+        ch = w * den / num;
+    }
+    if (cw <= 0 || ch <= 0)
+        return;
+    const int x = (w - cw) / 2;
+    const int y = (h - ch) / 2;
+    const QString crop = QStringLiteral("%1x%2+%3+%4").arg(cw).arg(ch).arg(x).arg(y);
+    const QByteArray bytes = crop.toUtf8();
+    mpv_set_property_string(m_handle, "video-crop", bytes.constData());
+}
+
+void MpvCore::setCustomVideoCrop(int w, int h)
+{
+    if (!m_handle || w <= 0 || h <= 0)
+        return;
+    // Clamp the requested crop to the source frame size, centered.
+    mpv_node node;
+    int vw = 0, vh = 0;
+    if (mpv_get_property(m_handle, "video-params", MPV_FORMAT_NODE, &node) == 0) {
+        vw = mpvNodeInt(node, "w", 0);
+        vh = mpvNodeInt(node, "h", 0);
+        mpv_free_node_contents(&node);
+    }
+    if (vw <= 0 || vh <= 0)
+        return;
+    const int cw = std::min(w, vw);
+    const int ch = std::min(h, vh);
+    const int x = (vw - cw) / 2;
+    const int y = (vh - ch) / 2;
+    const QString crop = QStringLiteral("%1x%2+%3+%4").arg(cw).arg(ch).arg(x).arg(y);
+    const QByteArray bytes = crop.toUtf8();
+    mpv_set_property_string(m_handle, "video-crop", bytes.constData());
+}
+
+void MpvCore::clearVideoCrop()
+{
+    if (m_handle)
+        mpv_set_property_string(m_handle, "video-crop", "no");
+}
+
+void MpvCore::setVideoRotate(int deg)
+{
+    deg = ((deg % 360) + 360) % 360;
+    if (deg == m_videoRotate)
+        return;
+    m_videoRotate = deg;
+    Q_EMIT videoRotateChanged();
+    if (m_handle) {
+        const QByteArray bytes = QByteArray::number(deg);
+        mpv_set_property_string(m_handle, "video-rotate", bytes.constData());
+    }
+}
+
+void MpvCore::setHwdecEnabled(bool on)
+{
+    if (on == m_hwdecEnabled)
+        return;
+    m_hwdecEnabled = on;
+    Q_EMIT hwdecEnabledChanged();
+    if (m_handle)
+        mpv_set_property_string(m_handle, "hwdec", on ? "auto" : "no");
+}
+
+void MpvCore::setDeinterlaceEnabled(bool on)
+{
+    if (on == m_deinterlaceEnabled)
+        return;
+    m_deinterlaceEnabled = on;
+    Q_EMIT deinterlaceEnabledChanged();
+    if (m_handle)
+        mpv_set_property_string(m_handle, "deinterlace", on ? "yes" : "no");
+}
+
+void MpvCore::setHdrEnabled(bool on)
+{
+    if (on == m_hdrEnabled)
+        return;
+    m_hdrEnabled = on;
+    Q_EMIT hdrEnabledChanged();
+    if (!m_handle)
+        return;
+    // HDR off = force plain SDR tone clamp (no HDR peak detection).
+    if (on) {
+        mpv_set_property_string(m_handle, "tone-mapping", "auto");
+        mpv_set_property_string(m_handle, "hdr-compute-peak", "auto");
+    } else {
+        mpv_set_property_string(m_handle, "tone-mapping", "clip");
+        mpv_set_property_string(m_handle, "hdr-compute-peak", "no");
+    }
+}
+
+void MpvCore::setHue(double value)
+{
+    if (value != m_hue) {
+        m_hue = value;
+        Q_EMIT hueChanged();
+    }
+    setDoubleProperty(m_handle, "hue", m_hue);
+}
+
+// --- audio ------------------------------------------------------------
+
+QVariantList MpvCore::audioTracks()
+{
+    QVariantList out;
+    if (!m_handle)
+        return out;
+    mpv_node root{};
+    if (mpv_get_property(m_handle, "track-list", MPV_FORMAT_NODE, &root) != 0) {
+        return out;
+    }
+    if (root.format != MPV_FORMAT_NODE_ARRAY) {
+        mpv_free_node_contents(&root);
+        return out;
+    }
+    for (int i = 0; i < root.u.list->num; ++i) {
+        const mpv_node &entry = root.u.list->values[i];
+        if (entry.format != MPV_FORMAT_NODE_MAP)
+            continue;
+        if (mpvNodeString(entry, "type") != QLatin1String("audio"))
+            continue;
+        const int id = mpvNodeInt(entry, "id", -1);
+        QString title = mpvNodeString(entry, "title");
+        QString lang = mpvNodeString(entry, "lang");
+        QString codec = mpvNodeString(entry, "codec");
+        if (lang.isEmpty() && title.isEmpty())
+            title = tr("Hangsáv %1").arg(id);
+        QString label = title;
+        if (!lang.isEmpty())
+            label += QStringLiteral(" [%1]").arg(lang.toUpper());
+        if (!codec.isEmpty() && codec != QLatin1String("unknown"))
+            label += QStringLiteral(" · %2").arg(codec);
+        QVariantMap t;
+        t["id"] = id;
+        t["title"] = label;
+        t["selected"] = (id == m_currentAudioId);
+        out.append(t);
+    }
+    mpv_free_node_contents(&root);
+    return out;
+}
+
+void MpvCore::setAudioTrack(int id)
+{
+    if (!m_handle)
+        return;
+    const QByteArray bytes = QByteArray::number(id);
+    mpv_set_property_string(m_handle, "aid", bytes.constData());
+}
+
+void MpvCore::setAudioEqBand(int index, double gain)
+{
+    if (index < 0 || index >= m_audioEqGains.size())
+        return;
+    m_audioEqGains[index] = gain;
+    Q_EMIT audioEqGainsChanged();
+    if (m_eqTimer)
+        m_eqTimer->start();
+}
+
+void MpvCore::setAudioEqGains(const QVariantList &gains)
+{
+    for (int i = 0; i < gains.size() && i < m_audioEqGains.size(); ++i)
+        m_audioEqGains[i] = gains.at(i);
+    Q_EMIT audioEqGainsChanged();
+    if (m_eqTimer)
+        m_eqTimer->start();
+}
+
+void MpvCore::resetAudioEq()
+{
+    setAudioEqGains(QVariantList() << 0.0 << 0.0 << 0.0 << 0.0 << 0.0
+                                   << 0.0 << 0.0 << 0.0 << 0.0 << 0.0);
+}
+
+void MpvCore::applyAudioEq()
+{
+    buildAudioEqFilter();
+}
+
+void MpvCore::buildAudioEqFilter()
+{
+    if (!m_handle)
+        return;
+    // 10-band graphic EQ via lavfi peaking filters. Frequencies follow the
+    // ISO one-third-octave ladder from 31 Hz to 16 kHz.
+    static const double freqs[10] = {
+        31.0, 62.0, 125.0, 250.0, 500.0,
+        1000.0, 2000.0, 4000.0, 8000.0, 16000.0,
+    };
+    QString chain = QStringLiteral("lavfi=[");
+    for (int i = 0; i < 10; ++i) {
+        const double g = m_audioEqGains.at(i).toDouble();
+        if (i > 0)
+            chain += QLatin1Char(',');
+        chain += QStringLiteral("equalizer=f=%1:t=o:w=1:g=%2")
+                     .arg(freqs[i], 0, 'f', 0)
+                     .arg(g, 0, 'f', 2);
+    }
+    chain += QLatin1Char(']');
+    setStringProperty(m_handle, "af", chain);
+}
+
+void MpvCore::loadExternalAudio(const QString &path)
+{
+    if (!m_handle || path.isEmpty())
+        return;
+    const QByteArray bytes = path.toUtf8();
+    const char *cmd[] = { "audio-add", bytes.constData(), "auto", nullptr };
+    mpv_command(m_handle, cmd);
+}
+
+// --- subtitles --------------------------------------------------------
+
+QVariantList MpvCore::subtitleTracks()
+{
+    QVariantList out;
+    if (!m_handle)
+        return out;
+    mpv_node root{};
+    if (mpv_get_property(m_handle, "track-list", MPV_FORMAT_NODE, &root) != 0) {
+        return out;
+    }
+    if (root.format != MPV_FORMAT_NODE_ARRAY) {
+        mpv_free_node_contents(&root);
+        return out;
+    }
+    for (int i = 0; i < root.u.list->num; ++i) {
+        const mpv_node &entry = root.u.list->values[i];
+        if (entry.format != MPV_FORMAT_NODE_MAP)
+            continue;
+        if (mpvNodeString(entry, "type") != QLatin1String("sub"))
+            continue;
+        const int id = mpvNodeInt(entry, "id", -1);
+        QString title = mpvNodeString(entry, "title");
+        QString lang = mpvNodeString(entry, "lang");
+        if (lang.isEmpty() && title.isEmpty())
+            title = tr("Felirat %1").arg(id);
+        QString label = title;
+        if (!lang.isEmpty())
+            label += QStringLiteral(" [%1]").arg(lang.toUpper());
+        QVariantMap t;
+        t["id"] = id;
+        t["title"] = label;
+        t["selected"] = (id == m_currentSubtitleId);
+        out.append(t);
+    }
+    mpv_free_node_contents(&root);
+    return out;
+}
+
+void MpvCore::setSubtitleTrack(int id)
+{
+    if (!m_handle)
+        return;
+    const QByteArray bytes = QByteArray::number(id);
+    mpv_set_property_string(m_handle, "sid", bytes.constData());
+}
+
+void MpvCore::setSubDelay(double value)
+{
+    if (value != m_subDelay) {
+        m_subDelay = value;
+        Q_EMIT subDelayChanged();
+    }
+    setDoubleProperty(m_handle, "sub-delay", m_subDelay);
+}
+
+void MpvCore::setSubPos(double value)
+{
+    value = std::max(0.0, std::min(150.0, value));
+    if (value != m_subPos) {
+        m_subPos = value;
+        Q_EMIT subPosChanged();
+    }
+    setDoubleProperty(m_handle, "sub-pos", m_subPos);
+}
+
+void MpvCore::setSubFontSize(double value)
+{
+    if (value != m_subFontSize) {
+        m_subFontSize = value;
+        Q_EMIT subFontSizeChanged();
+    }
+    setDoubleProperty(m_handle, "sub-font-size", m_subFontSize);
+}
+
+void MpvCore::setSubFontFamily(const QString &family)
+{
+    const QString v = family.isEmpty() ? QStringLiteral("Sans") : family;
+    if (v != m_subFontFamily) {
+        m_subFontFamily = v;
+        Q_EMIT subFontFamilyChanged();
+    }
+    setStringProperty(m_handle, "sub-font", m_subFontFamily);
+}
+
+void MpvCore::setSubColor(const QString &color)
+{
+    if (color != m_subColor) {
+        m_subColor = color;
+        Q_EMIT subColorChanged();
+    }
+    setStringProperty(m_handle, "sub-color", m_subColor);
+}
+
+void MpvCore::setSubBorderColor(const QString &color)
+{
+    if (color != m_subBorderColor) {
+        m_subBorderColor = color;
+        Q_EMIT subBorderColorChanged();
+    }
+    setStringProperty(m_handle, "sub-border-color", m_subBorderColor);
+}
+
+void MpvCore::setSubBorderSize(double value)
+{
+    if (value != m_subBorderSize) {
+        m_subBorderSize = value;
+        Q_EMIT subBorderSizeChanged();
+    }
+    setDoubleProperty(m_handle, "sub-border-size", m_subBorderSize);
+}
+
+void MpvCore::setSubBackColor(const QString &color)
+{
+    if (color != m_subBackColor) {
+        m_subBackColor = color;
+        Q_EMIT subBackColorChanged();
+    }
+    setStringProperty(m_handle, "sub-back-color", m_subBackColor);
+}
+
+void MpvCore::setSubtitleColor(const QString &color)
+{
+    setSubColor(color);
+}
+
+void MpvCore::loadExternalSubtitle(const QString &path)
+{
+    if (!m_handle || path.isEmpty())
+        return;
+    const QByteArray bytes = path.toUtf8();
+    const char *cmd[] = { "sub-add", bytes.constData(), "auto", nullptr };
+    mpv_command(m_handle, cmd);
+}
 
 bool MpvCore::hasNext()
 {

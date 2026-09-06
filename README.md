@@ -18,8 +18,16 @@ magyar felülettel.
   (`Ctrl+O` megnyitás, „Fájlok hozzáadása a listához" — a lejátszást nem
   szakítja meg)
 - **CLI**: több fájl parancssorból is indítható (`omaplayer a.mp4 b.mp4 …`)
-- **Beállítások**: hangerő/speeds, fényerő/kontraszt/telítettség/gamma,
-  felirat-méret, hang-késleltetés, feliratok ki/be
+- **Beállítások (3 fül — a fogaskerék gombbal / `G`)**:
+  - **Videó**: videosáv-információ (felbontás/kodek), képarány (alap, 4:3, 16:9,
+    16:10, 21:9, 5:4), körbevágás (azonos arányok + egyéni), elforgatás
+    (0/90/180/270°), sebesség, hardveres dekódolás, váltott soros szűrő, HDR
+    be/ki, fényerő/kontraszt/telítettség/gamma/színárnyalat csúszkák
+  - **Hang**: hangsáv-választó, külső hang file tallózója, hang-késleltetés,
+    szabadon állítható 10-sávos hangszínszabályzó (31 Hz–16 kHz)
+  - **Felirat**: be/ki, feliratsáv-választó, külső felirat tallózója,
+    késleltetés, pozíció, nagyítás, betűméret/betűtípus, szín, keret
+    (szín+szélesség) és háttérszín választó
 - **MPRIS** (D-Bus) — media-kulcsok, GNOME/Wayland média-integráció
 - **Elrejtés a tálcára**: jobb gomb → menüpont (a lejátszás közben a
   StatusNotifier-alapú tálcaikonra kerül; kattintás visszahozza, jobb-gombos
