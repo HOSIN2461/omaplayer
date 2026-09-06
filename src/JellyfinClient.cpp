@@ -540,10 +540,13 @@ void JellyfinClient::startPlayback(const QVariantMap &item)
             const bool haveResume = resumeBalance > 0;
             const double resumeSeconds = haveResume ? resumeBalance / qreal(kTicksPerSecond) : 0.0;
 
-            // 2) Tell the server playback started.
+            // 2) Tell the server playback started. The UserId field is
+            //    required field of the request body (else the server answers
+            //    with 400 and never attaches the session/resume report).
             post(QUrl(baseUrl() + QStringLiteral("/Sessions/Playing")
                       + QLatin1Char('?') + apiKeyQuery(token())),
                  QJsonObject{
+                     { QStringLiteral("UserId"), m_active.value(QStringLiteral("userId")).toString() },
                      { QStringLiteral("ItemId"), item.value(QStringLiteral("id")).toString() },
                      { QStringLiteral("MediaSourceId"), mediaSourceId },
                      { QStringLiteral("PlaySessionId"), sessionId },
@@ -599,16 +602,17 @@ void JellyfinClient::reportTick()
 
     post(QUrl(baseUrl() + QStringLiteral("/Sessions/Playing/Progress")
               + QLatin1Char('?') + apiKeyQuery(token())),
-         QJsonObject{
-             { QStringLiteral("ItemId"), m_trackItemId },
-             { QStringLiteral("MediaSourceId"), m_trackMediaSource },
-             { QStringLiteral("PlaySessionId"), m_trackSession },
-             { QStringLiteral("PositionTicks"),
-               double(qint64(m_lastPositionSeconds * kTicksPerSecond)) },
-             { QStringLiteral("CanSeek"), true },
-             { QStringLiteral("PlayMethod"), QStringLiteral("DirectPlay") },
-         },
-         [this](const QJsonObject &) {});
+QJsonObject{
+                     { QStringLiteral("UserId"), m_active.value(QStringLiteral("userId")).toString() },
+                     { QStringLiteral("ItemId"), m_trackItemId },
+                     { QStringLiteral("MediaSourceId"), m_trackMediaSource },
+                     { QStringLiteral("PlaySessionId"), m_trackSession },
+                     { QStringLiteral("PositionTicks"),
+                       double(qint64(m_lastPositionSeconds * kTicksPerSecond)) },
+                     { QStringLiteral("CanSeek"), true },
+                     { QStringLiteral("PlayMethod"), QStringLiteral("DirectPlay") },
+                 },
+                 [this](const QJsonObject &) {});
 }
 
 void JellyfinClient::advanceToNextEpisode()
@@ -656,6 +660,7 @@ void JellyfinClient::reportStop()
         post(QUrl(baseUrl() + QStringLiteral("/Sessions/Playing/Stopped")
                   + QLatin1Char('?') + apiKeyQuery(token())),
              QJsonObject{
+                 { QStringLiteral("UserId"), m_active.value(QStringLiteral("userId")).toString() },
                  { QStringLiteral("ItemId"), m_trackItemId },
                  { QStringLiteral("MediaSourceId"), m_trackMediaSource },
                  { QStringLiteral("PlaySessionId"), m_trackSession },
