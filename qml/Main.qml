@@ -52,6 +52,7 @@ ApplicationWindow {
         onSettings: () => openSettings()
         onPlaylist: () => openPlaylist()
         onRetouch: () => reTouch()
+        onFlash: (g, t) => flashAction(g, t)
     }
 
     // Auto-hide: fade the bar away after idle, keep it while the pointer or a
@@ -89,8 +90,12 @@ ApplicationWindow {
             if (contextMenu.visible) { contextMenu.close(); return }
             if (mouse.button === Qt.RightButton)
                 contextMenu.openAt(mouse.x, mouse.y)
-            else
+            else {
+                const willPause = mpv.playing
                 mpv.togglePause()
+                flashAction(willPause ? "\uF04C" : "\uF04B",
+                            willPause ? qsTr("Szünet") : qsTr("Lejátszás"))
+            }
         }
         onDoubleClicked: mouse => {
             if (mouse.button === Qt.LeftButton)
@@ -103,10 +108,15 @@ ApplicationWindow {
             const horiz = wheel.angleDelta.x !== 0 || (wheel.modifiers & Qt.ShiftModifier)
             const delta = horiz ? wheel.angleDelta.x !== 0 ? wheel.angleDelta.x : wheel.angleDelta.y
                                 : wheel.angleDelta.y
-            if (horiz)
+            if (horiz) {
                 mpv.seekRelative(delta > 0 ? 10 : -10)
-            else
-                mpv.setVolume(Math.max(0, Math.min(150, mpv.volume + delta / 8)))
+                flashAction(delta > 0 ? "\uF051" : "\uF048",
+                            (delta > 0 ? "+" : "\u2212") + "10 mp")
+            } else {
+                const newVol = Math.max(0, Math.min(150, mpv.volume + delta / 8))
+                mpv.setVolume(newVol)
+                flashAction(volGlyph(newVol, mpv.muted), String(newVol) + " %")
+            }
         }
 
         // Any mouse movement over the player surfaces the controls; they fade
@@ -771,9 +781,87 @@ ApplicationWindow {
     // Both side drawers share one width so they swap size-for-size.
     readonly property real drawerWidth: Math.max(240, Math.min(380, Math.round(root.width * 0.62)))
 
+    // --- floating action flash (top-left corner) -------------------------
+    // A small "liquid glass" pill that flashes whatever just happened (play /
+    // pause / stop / volume / mute / seek / next-previous). It never takes
+    // pointer input; clicks pass through to the gesture layer below.
+    Item {
+        id: flashPop
+        enabled: false
+        z: 90
+        x: 10
+        y: 10
+        width: flashRow.implicitWidth + 22
+        height: 34
+        opacity: 0
+
+        visible: opacity > 0.02
+        Behavior on opacity { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
+
+        function showAction(glyph, label) {
+            flashGlyph.text = glyph
+            flashGlyph.visible = glyph.length > 0
+            flashLabel.text = label
+            flashPop.opacity = 1
+            flashTimer.restart()
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            radius: 17
+            gradient: Gradient {
+                GradientStop { position: 0.0; color: "#cc38414b" }
+                GradientStop { position: 1.0; color: "#e60d0d12" }
+            }
+            border.color: "#2effffff"
+            border.width: 1
+        }
+
+        Row {
+            id: flashRow
+            anchors.centerIn: parent
+            spacing: 7
+
+            Text {
+                id: flashGlyph
+                text: ""
+                font.family: "Font Awesome 7 Free Solid"
+                font.pixelSize: 14
+                color: Colors.accent
+            }
+            Text {
+                id: flashLabel
+                text: ""
+                font.pixelSize: 12
+                font.weight: Font.DemiBold
+                color: Colors.overlayText
+            }
+        }
+
+        Timer {
+            id: flashTimer
+            interval: 1250
+            onTriggered: flashPop.opacity = 0
+        }
+    }
+
+    // Route a (glyph, label) pair to the top-left indicator; used by both the
+    // control bar and the keyboard/gesture handlers.
+    function flashAction(glyph, label) {
+        flashPop.showAction(glyph, label)
+    }
+
+    function volGlyph(vol, muted) {
+        if (muted) return "\uF6A9"
+        return vol < 1 ? "\uF026"
+             : vol < 50 ? "\uF027"
+             : "\uF028"
+    }
+
     function toggleFullscreen() {
         isFullScreen = !isFullScreen
         mpv.windowFullscreen(isFullScreen)
+        flashAction("\uF065", isFullScreen ? qsTr("Teljes képernyő") : qsTr("Ablak"))
     }
 
     // The bar's settings gear → video colours / subtitles / audio drawer.
@@ -2035,22 +2123,57 @@ ApplicationWindow {
     }
 
     // --- keyboard ----------------------------------------------------------------
-    Shortcut { sequence: "Space"; onActivated: mpv.togglePause() }
-    Shortcut { sequence: "Left"; onActivated: mpv.seekRelative(-5) }
-    Shortcut { sequence: "Right"; onActivated: mpv.seekRelative(5) }
-    Shortcut { sequence: "Up"; onActivated: mpv.setVolume(Math.min(mpv.volume + 10, 150)) }
-    Shortcut { sequence: "Down"; onActivated: mpv.setVolume(Math.max(mpv.volume - 10, 0)) }
-    Shortcut { sequence: "M"; onActivated: mpv.toggleMute() }
+    Shortcut { sequence: "Space"; onActivated: {
+        const willPause = mpv.playing
+        mpv.togglePause()
+        flashAction(willPause ? "\uF04C" : "\uF04B",
+                    willPause ? qsTr("Szünet") : qsTr("Lejátszás"))
+    } }
+    Shortcut { sequence: "Left"; onActivated: {
+        mpv.seekRelative(-5)
+        flashAction("\uF048", "\u22125 mp")
+    } }
+    Shortcut { sequence: "Right"; onActivated: {
+        mpv.seekRelative(5)
+        flashAction("\uF051", "+5 mp")
+    } }
+    Shortcut { sequence: "Up"; onActivated: {
+        const newVol = Math.min(mpv.volume + 10, 150)
+        mpv.setVolume(newVol)
+        flashAction(volGlyph(newVol, mpv.muted), newVol + " %")
+    } }
+    Shortcut { sequence: "Down"; onActivated: {
+        const newVol = Math.max(mpv.volume - 10, 0)
+        mpv.setVolume(newVol)
+        flashAction(volGlyph(newVol, mpv.muted), newVol + " %")
+    } }
+    Shortcut { sequence: "M"; onActivated: {
+        const muted = !mpv.muted
+        mpv.toggleMute()
+        flashAction(volGlyph(mpv.volume, muted), muted ? qsTr("Némítva") : qsTr("Hang"))
+    } }
     Shortcut { sequence: "F"; onActivated: root.toggleFullscreen() }
     Shortcut { sequence: "I"; onActivated: mpv.toggleMinimize() }
     Shortcut { sequence: "G"; onActivated: openSettings() }
     Shortcut { sequence: "L"; onActivated: openPlaylist() }
     // Playback speed (mpv default bindings: halve / double).
-    Shortcut { sequence: "["; onActivated: mpv.speed = Math.max(0.25, mpv.speed / 2) }
-    Shortcut { sequence: "]"; onActivated: mpv.speed = Math.min(4, mpv.speed * 2) }
+    Shortcut { sequence: "["; onActivated: {
+        mpv.speed = Math.max(0.25, mpv.speed / 2)
+        flashAction("\uF0E7", mpv.speed.toFixed(2) + "\u00D7")
+    } }
+    Shortcut { sequence: "]"; onActivated: {
+        mpv.speed = Math.min(4, mpv.speed * 2)
+        flashAction("\uF0E7", mpv.speed.toFixed(2) + "\u00D7")
+    } }
     // Playlist navigation (mpv): [n]ext / [p]revious.
-    Shortcut { sequence: "N"; onActivated: mpv.playlistNext() }
-    Shortcut { sequence: "P"; onActivated: mpv.playlistPrevious() }
+    Shortcut { sequence: "N"; onActivated: {
+        mpv.playlistNext()
+        flashAction("\uF051", qsTr("Következő"))
+    } }
+    Shortcut { sequence: "P"; onActivated: {
+        mpv.playlistPrevious()
+        flashAction("\uF048", qsTr("Előző"))
+    } }
     Shortcut { sequence: "Delete"; onActivated: playlistPanel.removeSelected() }
     Shortcut { sequence: "Ctrl+F"; onActivated: searchToggle.clicked() }
     Shortcut { sequence: "Ctrl+O"; onActivated: openDialog.open() }
@@ -2062,5 +2185,8 @@ ApplicationWindow {
         if (updatePopup.visible) { updatePopup.close(); return }
         if (root.isFullScreen) { root.isFullScreen = false; mpv.windowFullscreen(false) }
     } }
-    Shortcut { sequence: "Ctrl+0"; onActivated: mpv.setVolume(100) }
+    Shortcut { sequence: "Ctrl+0"; onActivated: {
+        mpv.setVolume(100)
+        flashAction(volGlyph(100, mpv.muted), "100 %")
+    } }
 }

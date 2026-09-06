@@ -8,9 +8,15 @@ magyar felülettel.
 
 - **mpv motor** — széles kodek-, konténer- és hálózati támogatás; hardveres
   dekódolás (vaapi/nvdec) az mpv-n keresztül
-- **Friss vezérlősáv**: keresősáv automatikus folytatással (a tekercselést
-  szünetből a keresés után folytatja), hátralévő idő kijelzés, a bár
-  igazodik az ablak méretéhez (keskeny ablakban a gomb-blokkok kicsúsznak)
+- **Liquid-glass vezérlősáv**: áttetsző „üveg" pill (fokozatos átmenet,
+  felső élcsillanás, lágy árnyék), kék akcentusú csúszkákkal; a sorminta a
+  volumen csúszkától indul, majd vissza/lejátszás-szünet/stop/előre, a jobb
+  szélen a lejátszási lista és a beállítások. Alul a filmszalag: elöl az
+  eltelt, hátul a teljes idő; a kereső automatikusan folytatja a lejátszást,
+  a bár igazodik az ablak méretéhez (keskeny ablakban a volumen és az
+  előző/következő gomb-pár kicsúszik). Bal felső sarokban kis **művelet-jelző**
+  villan, ami kiírja, mi történt épp (lejátszás/szünet, hangerő, némítás,
+  keresés, leállítás, sebesség stb.)
 - **Könyvtár (G) és Beállítások (L) fiókok** — azonos méret, egyszerre
   csak az egyik lehet nyitva, a vezérlősáv felett jelennek meg; a
   lejátszási lista **élőben követi a lejátszott elemet** (kiemelés)
