@@ -165,6 +165,9 @@ public:
     void setGamma(double value);
     void setSubScale(double value);
     void setAudioDelay(double value);
+    // Override the stream title mpv shows (Jellyfin direct-play URLs are
+    // meaningless api_key URLs; set a readable one after opening).
+    void setMediaTitle(const QString &title);
     // --- video in/out ----------------------------------------------------
     void setVideoAspect(const QString &aspect);
     Q_INVOKABLE void setVideoCropAspect(const QString &aspect);

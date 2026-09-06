@@ -47,6 +47,7 @@ ApplicationWindow {
         // reach these Main.qml methods and silently did nothing.
         onSettings: () => openSettings()
         onPlaylist: () => openPlaylist()
+        onJellyfin: () => openJellyfin()
         onRetouch: () => reTouch()
         onFlash: (g, t) => flashAction(g, t)
     }
@@ -60,7 +61,8 @@ ApplicationWindow {
         repeat: true
         onTriggered: {
             if (!bar.anywhereHovered && !bar.dragActive
-                    && !settingsMenu.visible && !playlistPanel.visible)
+                    && !settingsMenu.visible && !playlistPanel.visible
+                    && !jellyfinPanel.visible)
                 bar.hide()
         }
     }
@@ -84,6 +86,7 @@ ApplicationWindow {
             if (updatePopup.visible) { updatePopup.close(); return }
             if (settingsMenu.visible) { settingsMenu.close(); return }
             if (playlistPanel.visible) { playlistPanel.close(); return }
+            if (jellyfinPanel.visible) { jellyfinPanel.close(); return }
             if (contextMenu.visible) { contextMenu.close(); return }
             if (mouse.button === Qt.RightButton)
                 contextMenu.openAt(mouse.x, mouse.y)
@@ -865,15 +868,25 @@ ApplicationWindow {
     // Only one drawer may be open at a time: opening one dismisses the other.
     function openSettings() {
         playlistPanel.visible = false
+        jellyfinPanel.visible = false
         settingsMenu.open()
     }
 
     // The bar's playlist button (three lines) → refresh + open the list drawer.
     function openPlaylist() {
         settingsMenu.visible = false
+        jellyfinPanel.visible = false
         playlistPanel.refresh()
         playlistPanel.selectedIndex = -1
         playlistPanel.open()
+    }
+
+    // The bar's Jellyfin button (film) → browse the media server drawer.
+    // Same one-drawer rule: opening it dismisses the settings/playlist drawers.
+    function openJellyfin() {
+        settingsMenu.visible = false
+        playlistPanel.visible = false
+        jellyfinPanel.open()
     }
 
     // --- open media ------------------------------------------------------------
@@ -1442,6 +1455,19 @@ ApplicationWindow {
             }
         }
     }
+    // --- Jellyfin panel (the bar's film button) ------------------------
+    // Browser drawer for the media server: same in-window rule as the others,
+    // only one drawer open at a time.
+    JellyfinPanel {
+        id: jellyfinPanel
+        z: 50
+        visible: false
+        x: root.width - width - 4
+        y: 4
+        width: root.drawerWidth
+        height: root.height - bar.height - 16
+    }
+
     // --- settings panel (the bar's gear) -------------------------------
     // A right-edge drawer like the playlist panel: it stays inside the window
     // at any size (the subtitles block used to overflow out of the short
@@ -2208,6 +2234,10 @@ ApplicationWindow {
     Shortcut { sequence: "I"; onActivated: mpv.toggleMinimize() }
     Shortcut { sequence: "G"; onActivated: openSettings() }
     Shortcut { sequence: "L"; onActivated: openPlaylist() }
+    Shortcut { sequence: "J"; onActivated: {
+        if (jellyfinPanel.visible) { jellyfinPanel.close(); return }
+        openJellyfin()
+    } }
     // Playback speed (mpv default bindings: halve / double).
     Shortcut { sequence: "["; onActivated: {
         mpv.speed = Math.max(0.25, mpv.speed / 2)
@@ -2233,6 +2263,7 @@ ApplicationWindow {
     Shortcut { sequence: "Esc"; onActivated: {
         if (settingsMenu.visible) { settingsMenu.close(); return }
         if (playlistPanel.visible) { playlistPanel.close(); return }
+        if (jellyfinPanel.visible) { jellyfinPanel.close(); return }
         if (urlDialog.visible) { urlDialog.close(); return }
         if (updatePopup.visible) { updatePopup.close(); return }
         if (root.isFullScreen) { root.isFullScreen = false; mpv.windowFullscreen(false) }

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(omaplayer VERSION 0.1.10 LANGUAGES CXX)
+project(omaplayer VERSION 0.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -22,6 +22,8 @@ qt_add_executable(omaplayer
     src/MprisPlayer.h
     src/Updater.cpp
     src/Updater.h
+    src/JellyfinClient.cpp
+    src/JellyfinClient.h
 )
 
 set_source_files_properties(qml/Colors.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
@@ -34,9 +36,16 @@ qt_add_qml_module(omaplayer
         qml/ControlBar.qml
         qml/IconButton.qml
         qml/Colors.qml
+        qml/JellyfinPanel.qml
 )
 
 target_include_directories(omaplayer PRIVATE src)
+
+# Version macro: used by main.cpp for QCoreApplication::setApplicationVersion,
+# keeping the header free of a hand-maintained number.
+target_compile_definitions(omaplayer PRIVATE
+    OMAPLAYER_VERSION="${PROJECT_VERSION}"
+)
 
 target_link_libraries(omaplayer PRIVATE
     Qt6::Core

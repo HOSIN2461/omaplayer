@@ -14,6 +14,7 @@
 
 #include "MpvCore.h"
 #include "MprisPlayer.h"
+#include "JellyfinClient.h"
 
 using namespace Qt::Literals::StringLiterals;
 
@@ -52,7 +53,7 @@ int main(int argc, char *argv[])
     std::setlocale(LC_NUMERIC, "C");
     QCoreApplication::setApplicationName(QStringLiteral("omaplayer"));
     QCoreApplication::setOrganizationName(QStringLiteral("omarchy"));
-    QCoreApplication::setApplicationVersion(QStringLiteral("0.1.8"));
+    QCoreApplication::setApplicationVersion(QStringLiteral(OMAPLAYER_VERSION));
 
     // Qt Quick must render through OpenGL for the libmpv OpenGL render API.
     QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
@@ -101,6 +102,11 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(
         QStringLiteral("updater"), updateCore);
     QTimer::singleShot(2000, updateCore, &Updater::autoUpdate);
+    // Jellyfin media-server client; the QML UI drives it via the context
+    // property (server mgmt, browse, play).
+    auto *jellyfin = new JellyfinClient(&app);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("jellyfin"), jellyfin);
     QObject::connect(
         &engine, &QQmlApplicationEngine::objectCreationFailed,
         &app, [] { qWarning() << "MAIN: objectCreationFailed"; QCoreApplication::exit(-1); },

@@ -45,6 +45,7 @@ Item {
     // which is why the settings/playlist popups silently never opened before.
     property var onSettings: null
     property var onPlaylist: null
+    property var onJellyfin: null
     property var onRetouch: null
     // Flash an action into the top-left indicator (glyph, label).
     property var onFlash: null
@@ -240,6 +241,18 @@ Item {
                     onClicked: {
                         if (bar.onPlaylist) bar.onPlaylist()
                         bar.flash("\uF00B", qsTr("Lejátszási lista"))
+                    }
+                }
+
+                IconButton {
+                    id: jellyBtn
+                    implicitWidth: 34
+                    implicitHeight: 34
+                    glyph: "\uF03D"                                 // FA video: media
+                    tip: qsTr("Jellyfin (J)")
+                    onClicked: {
+                        if (bar.onJellyfin) bar.onJellyfin()
+                        bar.flash("\uF03D", qsTr("Jellyfin"))
                     }
                 }
 

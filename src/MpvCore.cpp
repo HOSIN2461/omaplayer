@@ -989,7 +989,6 @@ void MpvCore::setSaturation(double value) { setDoubleProperty(m_handle, "saturat
 void MpvCore::setGamma(double value) { setDoubleProperty(m_handle, "gamma", value); }
 void MpvCore::setSubScale(double value) { setDoubleProperty(m_handle, "sub-scale", value); }
 void MpvCore::setAudioDelay(double value) { setDoubleProperty(m_handle, "audio-delay", value); }
-
 namespace {
 void setStringProperty(mpv_handle *handle, const char *name, const QString &value)
 {
@@ -1047,6 +1046,11 @@ bool mpvNodeStringOut(mpv_handle *handle, const char *name, QString *out)
     return true;
 }
 } // namespace
+
+void MpvCore::setMediaTitle(const QString &title)
+{
+    setStringProperty(m_handle, "force-media-title", title);
+}
 
 // Reads the current mpv option state into our mirrors the first time a file
 // loads (before any observe fires for the current value).
