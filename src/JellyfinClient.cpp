@@ -110,7 +110,8 @@ QString JellyfinClient::streamUrl(const QString &itemId, const QString &type) co
 QNetworkRequest JellyfinClient::request(const QUrl &url) const
 {
     QNetworkRequest req{url};
-    req.setRawHeader("User-Agent", "omaplayer/0.2.0");
+    req.setRawHeader("User-Agent",
+                     "omaplayer/" OMAPLAYER_VERSION);
     req.setTransferTimeout(15000);
     if (!token().isEmpty())
         req.setRawHeader("X-Emby-Token", token().toUtf8());
