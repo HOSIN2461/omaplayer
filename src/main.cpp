@@ -44,7 +44,7 @@ int main(int argc, char *argv[])
     std::setlocale(LC_NUMERIC, "C");
     QCoreApplication::setApplicationName(QStringLiteral("omaplayer"));
     QCoreApplication::setOrganizationName(QStringLiteral("omarchy"));
-    QCoreApplication::setApplicationVersion(QStringLiteral("0.1.6"));
+    QCoreApplication::setApplicationVersion(QStringLiteral("0.1.7"));
 
     // Qt Quick must render through OpenGL for the libmpv OpenGL render API.
     QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
