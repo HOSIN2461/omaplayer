@@ -4,11 +4,13 @@
 #include <QString>
 #include <QPointer>
 #include <QPair>
+#include <QSet>
 #include <QTimer>
 #include <QVector>
 #include <QtQmlIntegration>
 #include <functional>
 
+class AudioIntroMatcher;
 class QMenu;
 class QOpenGLContext;
 class QQuickItem;
@@ -47,6 +49,7 @@ class MpvCore : public QObject
     Q_PROPERTY(bool skipPromptVisible READ skipPromptVisible NOTIFY skipPromptChanged)
     Q_PROPERTY(QString skipPromptLabel READ skipPromptLabel NOTIFY skipPromptChanged)
     Q_PROPERTY(bool autoSkip READ autoSkip WRITE setAutoSkip NOTIFY autoSkipChanged)
+    Q_PROPERTY(bool audioDetection READ audioDetection WRITE setAudioDetection NOTIFY audioDetectionChanged)
 
     // --- video settings -------------------------------------------------
     Q_PROPERTY(QString videoAspect READ videoAspect WRITE setVideoAspect NOTIFY videoAspectChanged)
@@ -125,6 +128,8 @@ public:
     QString skipPromptLabel() const { return m_skipPromptLabel; }
     bool autoSkip() const { return m_autoSkip; }
     void setAutoSkip(bool on);
+    bool audioDetection() const { return m_audioDetection; }
+    void setAudioDetection(bool on);
 
     Q_INVOKABLE void open(const QString &location);
     Q_INVOKABLE void openList(const QStringList &files);
@@ -237,13 +242,21 @@ private:
     void skipRange(int index);
     void setSkipPromptVisible(bool visible);
     QString promptLabel(SkipType type) const;
+    void startAudioDetection();
+    void onAudioSectionFound(double start, double end);
+    void onAudioNoMatch(const QString &reason);
+    QString currentPlaylistPath();
     QVector<SkipRange> m_skipRanges;
     QVector<QPair<double, QString>> m_rawChapters;
     int m_skipPromptRange = -1;
     bool m_skipPromptVisible = false;
     bool m_autoSkip = false;
+    bool m_audioDetection = true;
     QString m_skipPromptLabel;
     QTimer *m_skipTimer = nullptr;
+    AudioIntroMatcher *m_audioMatcher = nullptr;
+    QString m_audioDetectionFile; // file the running/completed detection serves
+    QSet<QString> m_audioScanned;  // local files already probed this session
 
     void buildAudioEqFilter();
     QTimer *m_eqTimer = nullptr;
@@ -292,6 +305,7 @@ signals:
     void currentIndexChanged(int index);
     void skipPromptChanged();
     void autoSkipChanged(bool autoSkip);
+    void audioDetectionChanged(bool audioDetection);
 
     // --- video/audio/subtitle signals -------------------------------------
     void videoAspectChanged();

@@ -24,6 +24,8 @@ qt_add_executable(omaplayer
     src/Updater.h
     src/JellyfinClient.cpp
     src/JellyfinClient.h
+    src/AudioIntroMatcher.cpp
+    src/AudioIntroMatcher.h
 )
 
 set_source_files_properties(qml/Colors.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
@@ -63,6 +65,13 @@ qt_add_resources(omaplayer "translations"
     PREFIX "/translations"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/translations"
     FILES "${CMAKE_CURRENT_SOURCE_DIR}/translations/hu.qm"
+)
+
+# --- Vendored audio-intro-match helper (iina-skip-intro) ---
+qt_add_resources(omaplayer "audio_intro"
+    PREFIX "/audio-intro"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/res"
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/res/audio-intro-helper.mjs"
 )
 
 install(TARGETS omaplayer RUNTIME DESTINATION bin)

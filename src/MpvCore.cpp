@@ -1,9 +1,11 @@
 #include "MpvCore.h"
+#include "AudioIntroMatcher.h"
 
 #include <QOpenGLContext>
 #include <QQuickWindow>
 #include <QQuickItem>
 #include <QFile>
+#include <QFileInfo>
 #include <QTextStream>
 #include <QProcess>
 #include <QTimer>
@@ -124,6 +126,12 @@ mpv_observe_property(m_handle, 0, "pause", MPV_FORMAT_FLAG);
     m_eqTimer->setSingleShot(true);
     m_eqTimer->setInterval(220);
     connect(m_eqTimer, &QTimer::timeout, this, [this] { buildAudioEqFilter(); });
+
+    m_audioMatcher = new AudioIntroMatcher(this);
+    connect(m_audioMatcher, &AudioIntroMatcher::sectionFound,
+            this, &MpvCore::onAudioSectionFound);
+    connect(m_audioMatcher, &AudioIntroMatcher::noMatch,
+            this, &MpvCore::onAudioNoMatch);
 
     if (mpv_initialize(m_handle) < 0) {
         qWarning("mpv_initialize failed");
@@ -597,22 +605,30 @@ void MpvCore::rebuildSkipRanges()
     m_skipRanges.clear();
     setSkipPromptVisible(false);
     m_skipTimer->stop();
-    const int n = m_rawChapters.size();
-    if (n == 0)
-        return;
     const double total = m_duration;
     if (total <= 0.0 || total < kDetectMinDuration)
         return;
 
     const bool movie = total >= kMovieMinDuration;
-    // Title-based detection: intros/recaps only for episode-length media,
-    // credits for everything (movies included).
-    collectTitleSections(m_skipRanges, m_rawChapters, total, movie);
 
-    // Timing fallback only kicks in when titles found nothing, and never for
-    // movies — the structure heuristic is meant for episode-length media.
+    // The title + timing detectors need chapter data; without chapters only
+    // the audio-fingerprint detector can help (episode-length media).
+    if (!m_rawChapters.isEmpty()) {
+        // Title-based detection: intros/recaps only for episode-length media,
+        // credits for everything (movies included).
+        collectTitleSections(m_skipRanges, m_rawChapters, total, movie);
+
+        // Timing fallback only kicks in when titles found nothing, and never for
+        // movies — the structure heuristic is meant for episode-length media.
+        if (m_skipRanges.isEmpty() && !movie)
+            collectTimingSection(m_skipRanges, m_rawChapters, total);
+    }
+
+    // Second detector: audio fingerprinting for chapter-less episodes that
+    // share an intro with neighbouring playlist entries. Async — the result
+    // lands in onAudioSectionFound() and replaces any timing-imputed intro.
     if (m_skipRanges.isEmpty() && !movie)
-        collectTimingSection(m_skipRanges, m_rawChapters, total);
+        startAudioDetection();
 }
 
 QString MpvCore::normalizeChapterTitle(const QString &title)
@@ -1007,6 +1023,76 @@ void MpvCore::setAutoSkip(bool on)
     Q_EMIT autoSkipChanged(m_autoSkip);
 }
 
+void MpvCore::setAudioDetection(bool on)
+{
+    if (on == m_audioDetection)
+        return;
+    m_audioDetection = on;
+    Q_EMIT audioDetectionChanged(m_audioDetection);
+}
+
+void MpvCore::startAudioDetection()
+{
+    if (!m_audioDetection || !m_handle || !m_audioMatcher)
+        return;
+    if (m_audioMatcher->busy())
+        return;
+
+    const QVariantList items = playlistItems();
+    if (items.size() < 2)
+        return; // audio match requires at least one reference
+
+    QStringList paths;
+    paths.reserve(items.size());
+    int idx = -1;
+    for (const QVariant &v : items) {
+        const QVariantMap m = v.toMap();
+        if (m.value("current").toBool())
+            idx = paths.size();
+        paths.append(m.value("path").toString());
+    }
+    if (idx < 0 || idx >= paths.size())
+        return;
+
+    // Keyed on the actual playlist path — the "path" property observation can
+    // lag behind the duration event on first load, so m_filePath may still be
+    // empty here. The playlist path is authoritative and always available.
+    const QString mainPath = paths.at(idx);
+    if (!QFileInfo::exists(mainPath))
+        return; // remote/Jellyfin stream — audio matching is local-only
+    if (m_audioScanned.contains(mainPath))
+        return;
+
+    m_audioScanned.insert(mainPath);
+    m_audioDetectionFile = mainPath;
+    m_audioMatcher->detect(paths, idx);
+}
+
+void MpvCore::onAudioSectionFound(double start, double end)
+{
+    const QString cur = currentPlaylistPath();
+    if (!cur.isEmpty() && cur != m_audioDetectionFile)
+        return; // playback moved on before the fingerprint arrived
+    qInfo("Audio intro fingerprint detected: %.1fs–%.1fs", start, end);
+    // Replace any timing-generated intro ranges (from an earlier chapter-structure
+    // pass that didn't match via title). Credit ranges from the title pass are
+    // left in place.
+    for (int i = m_skipRanges.size() - 1; i >= 0; --i) {
+        if (m_skipRanges.at(i).type == SkipType::Intro)
+            m_skipRanges.removeAt(i);
+    }
+    m_skipRanges.append({ start, end, SkipType::Intro, false });
+    checkSkipPrompt();
+}
+
+void MpvCore::onAudioNoMatch(const QString &reason)
+{
+    const QString cur = currentPlaylistPath();
+    if (!cur.isEmpty() && cur != m_audioDetectionFile)
+        return;
+    qInfo("Audio intro detection: %s", qPrintable(reason));
+}
+
 void MpvCore::setVolume(double volume)
 {
     if (!m_handle)
@@ -1271,6 +1357,17 @@ QVariantList MpvCore::playlistItems()
         }
     }
     return out;
+}
+
+QString MpvCore::currentPlaylistPath()
+{
+    const QVariantList items = playlistItems();
+    for (const QVariant &v : items) {
+        const QVariantMap m = v.toMap();
+        if (m.value("current").toBool())
+            return m.value("path").toString();
+    }
+    return QString();
 }
 
 void MpvCore::toggleSubtitles()

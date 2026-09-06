@@ -1726,9 +1726,14 @@ ApplicationWindow {
                               vsInteger: true; vsValue: Math.round(mpv.speed * 100);
                               onChanged: v => mpv.speed = v / 100 }
 
-                ToggleRow { trLabel: qsTr("Intro/Stáblista automatikus átugrása"); trValue: mpv.autoSkip;
+ToggleRow { trLabel: qsTr("Intro/Stáblista automatikus átugrása"); trValue: mpv.autoSkip;
                 width: parent.width
                             onToggled: v => mpv.autoSkip = v }
+
+ToggleRow { trLabel: qsTr("Audio-hasonlóság érzékelés (fejezet nélküli epizódok)");
+                width: parent.width
+                            trValue: mpv.audioDetection;
+                            onToggled: v => mpv.audioDetection = v }
 
                 ToggleRow { trLabel: qsTr("Hardveres dekódolás"); trValue: mpv.hwdecEnabled;
                 width: parent.width
