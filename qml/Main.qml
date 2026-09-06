@@ -71,9 +71,9 @@ ApplicationWindow {
     // come already enriched; local files fall back to the TMDb path.
     function refreshMeta() {
         const item = jellyfin.playingItem
-        if (item && item.itemId) {
-            meta.forJellyfin(item, jellyfin.imageUrl(item.itemId, "Primary", 400),
-                             jellyfin.imageUrl(item.itemId, "Backdrop", 1280))
+        if (item && item.id) {
+            meta.forJellyfin(item, jellyfin.imageUrl(item.id, "Primary", 400),
+                             jellyfin.imageUrl(item.id, "Backdrop", 1280))
         } else if (mpv.filePath.length > 0) {
             meta.forLocalFile(mpv.filePath)
         } else {
@@ -89,14 +89,15 @@ ApplicationWindow {
         target: jellyfin
         function onPlayingItemChanged() { metaTimer.restart() }
     }
-    // Saving a TMDb key should immediately retry a previously "needkey" item
-    // so the card fills in without reopening the file.
+    // Saving a TMDb key or tweaking the provider chain should immediately
+    // retry a local lookup so the card fills in without reopening the file.
     Connections {
         target: meta
         function onTmdbKeyChanged() {
             if (meta.info && meta.info.state === "needkey")
                 metaTimer.restart()
         }
+        function onProvidersChanged() { metaTimer.restart() }
     }
     Timer {
         id: metaTimer
@@ -1790,6 +1791,23 @@ ToggleRow { trLabel: qsTr("Audio-hasonlóság érzékelés (fejezet nélküli ep
                 SectionLabel { text: qsTr("Információ (szünet)") }
                 ToggleRow { trLabel: qsTr("Metaadat kártya szünetnél"); trValue: meta.overlayEnabled;
                             onToggled: v => meta.overlayEnabled = v }
+                SectionLabel { text: qsTr("Metaadat forrás sorrendje") }
+                SegmentRow {
+                    width: parent.width
+                    segItems: [
+                        { label: "TMDB", value: "tmdb" },
+                        { label: "TVMaze", value: "tvmaze" },
+                        { label: "iTunes", value: "itunes" }
+                    ]
+                    segCurrent: meta.providers.primary
+                    onPick: v => meta.setPrimaryProvider(v)
+                }
+                ToggleRow { trLabel: qsTr("TMDB (API kulcs)"); trValue: meta.providers.tmdb === true;
+                            onToggled: v => meta.setProviderEnabled("tmdb", v) }
+                ToggleRow { trLabel: qsTr("TVMaze (kulcs nélkül)"); trValue: meta.providers.tvmaze === true;
+                            onToggled: v => meta.setProviderEnabled("tvmaze", v) }
+                ToggleRow { trLabel: qsTr("iTunes (kulcs nélkül)"); trValue: meta.providers.itunes === true;
+                            onToggled: v => meta.setProviderEnabled("itunes", v) }
                 RowLayout {
                     width: parent.width
                     spacing: 8

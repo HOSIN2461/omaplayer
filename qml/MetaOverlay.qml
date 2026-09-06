@@ -231,7 +231,7 @@ Item {
                         font.bold: true
                     }
                     Text {
-                        text: qsTr("Lokális fájlok info megjelenítéséhez adj meg ingyenes TMDB API kulcsot a beállításokban.")
+                        text: qsTr("A TMDB a beállított forrás, de nincs megadva API kulcs. Kapcsold be a kulcs nélküli forrásokat (TVMaze/iTunes) vagy add meg a TMDB kulcsot.")
                         color: Colors.textDim
                         font.pixelSize: 11
                         wrapMode: Text.WordWrap
