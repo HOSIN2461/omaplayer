@@ -44,6 +44,12 @@ Updater::Updater(QObject *parent)
 {
 }
 
+void Updater::autoUpdate()
+{
+    m_auto = true;
+    checkForUpdates();
+}
+
 void Updater::setBusy(bool busy)
 {
     if (m_busy == busy)
@@ -127,6 +133,8 @@ void Updater::checkForUpdates()
         emit updateAvailableChanged();
         emit downloadedChanged();
         setBusy(false);
+        if (m_auto && !m_assetUrl.isEmpty())
+            downloadPackage();
     });
 }
 
@@ -172,6 +180,8 @@ void Updater::downloadPackage()
         setStatus(QStringLiteral("Letöltve: %1").arg(m_downloadPath));
         emit downloadedChanged();
         setBusy(false);
+        if (m_auto)
+            installPackage();
     });
 }
 

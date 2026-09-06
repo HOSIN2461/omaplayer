@@ -8,6 +8,7 @@
 #include <QLibraryInfo>
 #include <QTranslator>
 #include <QDir>
+#include <QTimer>
 #include "Updater.h"
 #include <clocale>
 
@@ -99,6 +100,7 @@ int main(int argc, char *argv[])
     auto *updateCore = new Updater(&app);
     engine.rootContext()->setContextProperty(
         QStringLiteral("updater"), updateCore);
+    QTimer::singleShot(2000, updateCore, &Updater::autoUpdate);
     QObject::connect(
         &engine, &QQmlApplicationEngine::objectCreationFailed,
         &app, [] { qWarning() << "MAIN: objectCreationFailed"; QCoreApplication::exit(-1); },

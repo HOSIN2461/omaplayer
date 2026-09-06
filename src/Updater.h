@@ -36,6 +36,7 @@ public:
     Q_INVOKABLE void checkForUpdates();
     Q_INVOKABLE void downloadPackage();
     Q_INVOKABLE void installPackage();
+    void autoUpdate();
 
 signals:
     void statusChanged();
@@ -59,4 +60,5 @@ private:
     bool m_updateAvailable = false;
     bool m_downloaded = false;
     bool m_busy = false;
+    bool m_auto = false;
 };
