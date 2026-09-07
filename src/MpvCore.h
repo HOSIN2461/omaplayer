@@ -8,6 +8,7 @@
 #include <QTimer>
 #include <QVector>
 #include <QImage>
+#include <QVariantMap>
 #include <QtQmlIntegration>
 #include <functional>
 
@@ -145,6 +146,12 @@ public:
     bool resumeEnabled() const { return m_resumeEnabled; }
     void setResumeEnabled(bool on);
     QVariantMap mediaInfo() const { return m_mediaInfo; }
+
+    // Live playback stats for the on-demand statistics overlay (mpv's stats
+    // script equivalent): render FPS, A/V sync, codecs/pixelformat, current
+    // bitrates, hwdec and dropped frames. Polled freshly on each call while
+    // the overlay is on screen; missing properties are simply omitted.
+    Q_INVOKABLE QVariantMap stats() const;
 
     Q_INVOKABLE void open(const QString &location);
     Q_INVOKABLE void openList(const QStringList &files);

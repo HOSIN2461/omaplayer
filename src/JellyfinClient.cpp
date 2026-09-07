@@ -583,6 +583,7 @@ void JellyfinClient::startPlayback(const QVariantMap &item)
 
             // 3) Open the stream in mpv (with a readable title, and jump to the
             //    resume point when the user was part-way through).
+            m_streamUrl = urlString;
             MpvCore::instance()->open(urlString);
             MpvCore::instance()->setMediaTitle(displayTitle(item));
             if (haveResume)
@@ -679,6 +680,15 @@ void JellyfinClient::advanceToNextEpisode()
         m_advancing = false;
         reportStop();
     });
+}
+
+void JellyfinClient::onFileOpened(const QString &path)
+{
+    // The user left the Jellyfin stream (local file, CLI arg, playlist move):
+    // end the server session so `playingItem` clears and refreshMeta() falls
+    // back to the metadata lookup for whatever is actually playing now.
+    if (m_tracking && !path.isEmpty() && path != m_streamUrl)
+        reportStop();
 }
 
 void JellyfinClient::reportStop()

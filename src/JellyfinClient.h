@@ -71,6 +71,14 @@ public:
     Q_INVOKABLE QString streamUrl(const QString &itemId,
                                   const QString &type = QStringLiteral("Videos")) const;
 
+    // The mpv core signals this whenever the playing path changes. When the
+    // new path is not the Jellyfin stream we opened (the user switched to a
+    // local file, CLI argument, playlist advance…), the server session must be
+    // closed and the info overlay must stop showing the stale Jellyfin card.
+    // Wired up in main.cpp (after MpvCore::instance() exists) because the
+    // constructor must not force-create the mpv singleton early.
+    void onFileOpened(const QString &path);
+
 signals:
     void serversChanged();
     void itemsChanged();
@@ -125,4 +133,5 @@ private:
     QString m_trackMediaSource;
     double m_lastPositionSeconds = 0.0;
     QVariantMap m_trackItem;      // last started item (info overlay)
+    QString m_streamUrl;          // exact URL opened in mpv for the track item
 };

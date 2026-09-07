@@ -11,11 +11,13 @@
 #include <QDir>
 #include <QTimer>
 #include "Updater.h"
+#include "KeyManager.h"
 #include <clocale>
 
 #include "MpvCore.h"
 #include "MprisPlayer.h"
 #include "JellyfinClient.h"
+#include "SubtitleClient.h"
 #include "MetadataInfo.h"
 
 using namespace Qt::Literals::StringLiterals;
@@ -109,6 +111,14 @@ int main(int argc, char *argv[])
     auto *jellyfin = new JellyfinClient(&app);
     engine.rootContext()->setContextProperty(
         QStringLiteral("jellyfin"), jellyfin);
+    // OpenSubtitles client — search + download subtitles for local files.
+    auto *subtitles = new SubtitleClient(&app);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("subtitleClient"), subtitles);
+    // Keyboard-shortcut manager (configurable bindings, QSettings-backed).
+    auto *keys = new KeyManager(&app);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("keyMgr"), keys);
     // Pause-overlay metadata (Jellyfin items + optional TMDb for local files).
     qmlRegisterType<MetadataInfo>("Omaplayer.Meta", 1, 0, "MetadataInfo");
     QObject::connect(
@@ -136,6 +146,11 @@ int main(int argc, char *argv[])
     // mixer strips and the desktop shell's media widget drive the player.
     MpvCore::instance(); // ensure the singleton exists before adaptors attach
     {
+        // A local (non-Jellyfin) file starting must close the Jellyfin session
+        // (see JellyfinClient::onFileOpened) — wired here, after the singleton
+        // exists, so the connect has a stable target.
+        QObject::connect(MpvCore::instance(), &MpvCore::filePathChanged,
+                         jellyfin, &JellyfinClient::onFileOpened);
         QDBusConnection bus = QDBusConnection::sessionBus();
         if (bus.isConnected()
             && bus.registerService(QStringLiteral("org.mpris.MediaPlayer2.omaplayer"))) {

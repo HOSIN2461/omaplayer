@@ -17,6 +17,7 @@ Item {
     id: bar
 
     required property MpvCore mpv
+    required property SeekThumbnails thumbs
 
     // Public show/hide state — Main.qml drives these.
     property bool exposed: true
@@ -292,24 +293,82 @@ Item {
 
                 property real targetRatio: 0.0
 
-                // Hover/drag preview bubble floating above the track.
-                Rectangle {
-                    id: seekTip
+                // Hover/drag preview floating above the track: a frame still
+                // from the generated sprite sheet plus the position readout,
+                // or just the time bubble while thumbnails are missing /
+                // still generating (remote streams, no ffmpeg).
+                Item {
+                    id: seekPreview
                     visible: seek.containsMouse && mpv.duration > 0
-                    width: 92
-                    height: 22
-                    radius: height / 2
-                    color: Colors.overlay
-                    border.color: Colors.border
+                    width: 176
+                    height: (thumbs.ready ? img.height + 2 : 0) + tip.height
+                    x: clampSeq(0, scrubWrap.width - width,
+                                scrubWrap.targetRatio * track.width - width / 2)
+                    y: -8 - height
+                    z: 10
 
-                    x: clampSeq(0, scrubWrap.width - width, scrubWrap.targetRatio * track.width - width / 2)
-                    y: -2
+                    Image {
+                        id: img
+                        visible: thumbs.ready
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        source: thumbs.imageUrl
+                        sourceClipRect: thumbs.sourceRect(
+                            scrubWrap.targetRatio * mpv.duration)
+                        sourceSize.width: 176
+                        fillMode: Image.Stretch
+                        width: 176
+                        height: visible ? Math.max(56,
+                            Math.round(176 * thumbs.tileHeight / thumbs.tileWidth))
+                                        : 0
+                        antialiasing: true
+                        smooth: true
 
+                        Rectangle {
+                            anchors.fill: parent
+                            color: "transparent"
+                            border.color: Colors.border
+                            border.width: 1
+                            radius: 6
+                        }
+                    }
+
+                    // Twirling spinner above the bubble while ffmpeg prepares
+                    // the sheet in the background.
                     Text {
-                        anchors.centerIn: parent
-                        text: fmtTime(scrubWrap.targetRatio * mpv.duration)
-                        color: Colors.overlayText
-                        font.pixelSize: 11
+                        id: busyBadge
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.top: img.bottom
+                        anchors.topMargin: -10
+                        visible: thumbs.generating
+                        text: "\uF110"                                     // FA spinner
+                        font.family: "Font Awesome 7 Free Solid"
+                        font.pixelSize: 12
+                        color: Colors.textDim
+                        RotationAnimator on rotation {
+                            running: busyBadge.visible
+                            from: 0
+                            to: 360
+                            duration: 900
+                            loops: Animation.Infinite
+                        }
+                    }
+
+                    Rectangle {
+                        id: tip
+                        width: 92
+                        height: 22
+                        radius: height / 2
+                        color: Colors.overlay
+                        border.color: Colors.border
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.bottom: parent.bottom
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: fmtTime(scrubWrap.targetRatio * mpv.duration)
+                            color: Colors.overlayText
+                            font.pixelSize: 11
+                        }
                     }
                 }
 

@@ -24,10 +24,18 @@ qt_add_executable(omaplayer
     src/Updater.h
     src/JellyfinClient.cpp
     src/JellyfinClient.h
+    src/CastManager.cpp
+    src/CastManager.h
+    src/SubtitleClient.cpp
+    src/SubtitleClient.h
+    src/KeyManager.cpp
+    src/KeyManager.h
     src/AudioIntroMatcher.cpp
     src/AudioIntroMatcher.h
     src/MetadataInfo.cpp
     src/MetadataInfo.h
+    src/SeekThumbnails.cpp
+    src/SeekThumbnails.h
 )
 
 set_source_files_properties(qml/Colors.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
@@ -43,6 +51,7 @@ qt_add_qml_module(omaplayer
         qml/JellyfinPanel.qml
         qml/MetaOverlay.qml
         qml/Toast.qml
+        qml/StatsOverlay.qml
 )
 
 target_include_directories(omaplayer PRIVATE src)

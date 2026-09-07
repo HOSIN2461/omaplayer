@@ -38,6 +38,7 @@ ApplicationWindow {
     ControlBar {
         id: bar
         mpv: root.mpv
+        thumbs: thumbs
 
         z: 2 // above the gesture layer so seek/buttons get the pointer
         anchors.left: parent.left
@@ -57,6 +58,16 @@ ApplicationWindow {
     // files (TMDb lookups for the latter when a key is configured).
     MetadataInfo {
         id: meta
+    }
+
+    // Seek previews: ffmpeg-generated sprite sheets for the scrubber.
+    SeekThumbnails {
+        id: thumbs
+    }
+
+    // DLNA cast to LAN renderers (TVs, VLC, Kodi…).
+    CastManager {
+        id: cast
     }
 
     // Screenshots: mpv cannot download the hardware-decoded frame in this
@@ -81,6 +92,13 @@ ApplicationWindow {
         meta: meta
         playing: mpv.playing
         onOpenSettings: openSettings()
+    }
+
+    // Live playback statistics overlay (Ctrl+I) — polls mpv while visible.
+    StatsOverlay {
+        id: statsOverlay
+        anchors.fill: parent
+        mpv: root.mpv
     }
 
     // Notification toasts, bottom-left above the transport bar (the right
@@ -109,7 +127,11 @@ ApplicationWindow {
 
     Connections {
         target: mpv
-        function onFilePathChanged() { metaTimer.restart() }
+        function onFilePathChanged() {
+            metaTimer.restart()
+            thumbsTimer.restart()
+        }
+        function onDurationChanged() { thumbsTimer.restart() }
     }
     Connections {
         target: jellyfin
@@ -161,6 +183,14 @@ ApplicationWindow {
         id: metaTimer
         interval: 350
         onTriggered: refreshMeta()
+    }
+
+    // Once the media has settled (path + duration both known, debounced),
+    // start preparing the scrubber preview sheet in the background.
+    Timer {
+        id: thumbsTimer
+        interval: 400
+        onTriggered: thumbs.prepare(mpv.filePath, mpv.duration)
     }
 
     // Auto-hide: fade the bar away after idle, keep it while the pointer or a
@@ -691,6 +721,131 @@ ApplicationWindow {
                     glyph: "\uF2D1"
                     onActivate: () => mpv.hideToTray()
                 }
+
+                Rectangle {
+                    height: 1
+                    width: parent.width
+                    color: Colors.border
+                }
+
+                // Inline DLNA cast — renderer list lives inside the context
+                // menu itself (no popup) for a quick right-click workflow.
+                Text {
+                    text: qsTr("Kivetítés (DLNA)")
+                    color: Colors.accent
+                    font.pixelSize: 12
+                    font.weight: Font.DemiBold
+                    anchors.left: parent.left; anchors.leftMargin: 10
+                    anchors.topMargin: 4; anchors.bottomMargin: 2
+                }
+                Text {
+                    visible: cast.castUrl.length > 0
+                    text: cast.activeDeviceName
+                    color: Colors.accent
+                    font.pixelSize: 11
+                    anchors.left: parent.left; anchors.leftMargin: 10
+                    anchors.bottomMargin: 2
+                }
+                Repeater {
+                    model: cast.devices
+                    delegate: Rectangle {
+                        width: ctxCol.width
+                        height: 28
+                        radius: 6
+                        color: ctxDevMouse.containsMouse
+                               ? (modelData.name === cast.activeDeviceName
+                                  ? Colors.accent : Colors.hover)
+                               : (modelData.name === cast.activeDeviceName
+                                  ? "#26ffffff" : "transparent")
+                        border.color: modelData.name === cast.activeDeviceName
+                                      ? Colors.accent : "transparent"
+                        border.width: 1
+
+                        Row {
+                            anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 10
+                            spacing: 6
+                            // Glow dot next to active renderer
+                            Rectangle {
+                                width: 7; height: 7; radius: width / 2
+                                anchors.verticalCenter: parent.verticalCenter
+                                color: modelData.name === cast.activeDeviceName
+                                       ? Colors.accent : Colors.border
+                            }
+                            Text {
+                                width: parent.width - 12 - actionLabel.implicitWidth
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: modelData.name
+                                color: ctxDevMouse.containsMouse ? "#fff" : Colors.overlayText
+                                font.pixelSize: 12
+                                elide: Text.ElideRight
+                            }
+                            Text {
+                                id: actionLabel
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: modelData.name === cast.activeDeviceName
+                                      ? qsTr("áll") : qsTr("vetít")
+                                color: Colors.accent
+                                font.pixelSize: 10
+                            }
+                        }
+                        MouseArea {
+                            id: ctxDevMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            onClicked: {
+                                if (modelData.name === cast.activeDeviceName) {
+                                    cast.stopCast()
+                                    toastHost.show(qsTr("Kivetítés leállítva"), "info")
+                                } else {
+                                    if (!CastManager.isCastingCapable(mpv.filePath)) {
+                                        toastHost.show(qsTr("Csak helyi fájl kivetíthető"), "err")
+                                        return
+                                    }
+                                    cast.stopCast()
+                                    cast.cast(index, mpv.filePath, mpv.position)
+                                    toastHost.show(qsTr("Kivetítve: %1").arg(modelData.name), "ok")
+                                }
+                                contextMenu.close()
+                            }
+                            cursorShape: Qt.PointingHandCursor
+                        }
+                    }
+                }
+                // Scan / refresh button
+                Rectangle {
+                    width: ctxCol.width
+                    height: 26
+                    radius: 13
+                    color: ctxScanMouse.containsMouse ? Colors.hover : "#18ffffff"
+                    border.color: Colors.border
+                    border.width: 1
+                    Text {
+                        anchors.centerIn: parent
+                        text: cast.discovering ? qsTr("Keres\u00E1s\u2026") : qsTr("Rendererek keres\u00E9se")
+                        color: ctxScanMouse.containsMouse ? Colors.overlayText : Colors.textDim
+                        font.pixelSize: 11
+                    }
+                    MouseArea {
+                        id: ctxScanMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: { cast.startDiscovery(); contextMenu.close() }
+                        cursorShape: Qt.PointingHandCursor
+                    }
+                }
+
+                MenuRow {
+                    rowText: qsTr("Feliratok letöltése…")
+                    glyph: "\uF02D"                                     // FA search / download
+                    onActivate: () => openSubtitlesPopup()
+                }
+
+                Rectangle {
+                    height: 1
+                    width: parent.width
+                    color: Colors.border
+                }
+
                 MenuRow {
                     rowText: qsTr("Frissítések keresése")
                     glyph: "\uF021"
@@ -845,13 +1000,198 @@ ApplicationWindow {
         }
     }
 
-    // Surface the background (2s) auto-check: open the popup right away so
+    // --- fullscreen / window state --------------------------------------------
     // the download/install chain is visible instead of happening silently.
     Connections {
         target: updater
         function onUpdateAvailableChanged() {
             if (updater.updateAvailable)
                 updatePopup.open()
+        }
+    }
+
+    // --- subtitle download popup (OpenSubtitles) ----------------------------
+    function openSubtitlesPopup() {
+        contextMenu.close()
+        subtitlePopup.visible = true
+        if (!subtitleClient.hasApiKey) {
+            subtitleStatus.text = qsTr("Adj meg egy OpenSubtitles API kulcsot (ingyen szerezhető a opensubtitles.com oldalon), és töltsd le a feliratot.")
+        } else {
+            subtitleClient.searchForCurrentFile(mpv.filePath, mpv.mediaTitle)
+        }
+    }
+    Item {
+        id: subtitlePopup
+        width: 340
+        visible: false
+        z: 60
+
+        property real bodyH: subtitleCol.implicitHeight + 28
+
+        function close() { visible = false }
+
+        x: (root.width - width) / 2
+        y: 12
+        height: Math.min(bodyH, root.height - 24)
+
+        Rectangle {
+            anchors.fill: parent
+            radius: 14
+            color: Colors.overlay
+            border.color: Colors.border
+            border.width: 1
+        }
+
+        Column {
+            id: subtitleCol
+            anchors { left: parent.left; right: parent.right; top: parent.top; bottom: parent.bottom }
+            anchors.margins: 12
+            spacing: 8
+
+            RowLayout {
+                width: parent.width
+                Text {
+                    text: qsTr("Feliratok letöltése")
+                    font.pixelSize: 15
+                    font.weight: Font.DemiBold
+                    color: Colors.overlayText
+                    Layout.fillWidth: true
+                }
+                Text {
+                    text: qsTr("Bezárás")
+                    font.pixelSize: 12
+                    color: Colors.textDim
+                    MouseArea {
+                        anchors.fill: parent
+                        anchors.margins: -4
+                        hoverEnabled: true
+                        onClicked: subtitlePopup.close()
+                        cursorShape: Qt.PointingHandCursor
+                    }
+                }
+            }
+
+            Text {
+                id: subtitleStatus
+                width: parent.width
+                font.pixelSize: 12
+                color: Colors.overlayText
+                wrapMode: Text.Wrap
+            }
+
+            // API key entry (only when missing)
+            Row {
+                visible: !subtitleClient.hasApiKey
+                width: parent.width
+                spacing: 6
+
+                TextField {
+                    id: subApiKeyField
+                    width: parent.width - 92
+                    placeholderText: qsTr("API kulcs")
+                    color: Colors.overlayText
+                    font.pixelSize: 12
+                    selectByMouse: true
+                    inputMethodHints: Qt.ImhNoAutoUppercase
+                }
+                Rectangle {
+                    width: 86
+                    height: 32
+                    radius: 16
+                    color: subKeyMouse.containsMouse ? Colors.hover : Colors.accent
+                    Text {
+                        anchors.centerIn: parent
+                        text: qsTr("Mentés")
+                        font.pixelSize: 12
+                        color: "#0b0b0e"
+                    }
+                    MouseArea {
+                        id: subKeyMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: {
+                            const k = subApiKeyField.text.trim()
+                            if (k.length === 0) {
+                                toastHost.show(qsTr("Add meg az API kulcsot"), "err")
+                                return
+                            }
+                            subtitleClient.setApiKey(k)
+                            subtitleClient.searchForCurrentFile(mpv.filePath, mpv.mediaTitle)
+                        }
+                        cursorShape: Qt.PointingHandCursor
+                    }
+                }
+            }
+
+            Rectangle {
+                width: parent.width
+                height: 1
+                color: Colors.border
+                visible: subtitleClient.hasApiKey
+            }
+
+            // Search results (scrollable)
+            Rectangle {
+                width: parent.width
+                height: Math.min(subResList.contentHeight + 6, subtitlePopup.height - 150)
+                visible: subtitleClient.hasApiKey && subtitleClient.results.length > 0
+                color: "transparent"
+
+                ListView {
+                    id: subResList
+                    anchors.fill: parent
+                    clip: true
+                    model: subtitleClient.results
+
+                    delegate: Rectangle {
+                        width: subResList.width
+                        height: 30
+                        radius: 6
+                        color: subItemMouse.containsMouse ? Colors.hover : "transparent"
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.left: parent.left; anchors.leftMargin: 8
+                            anchors.right: parent.right; anchors.rightMargin: 8
+                            text: modelData.label
+                            color: subItemMouse.containsMouse ? Colors.overlayText : Colors.textDim
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                        }
+                        MouseArea {
+                            id: subItemMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            onClicked: {
+                                subtitleClient.download(modelData.fileId)
+                                toastHost.show(qsTr("Felirat letöltése…"), "info")
+                            }
+                            cursorShape: Qt.PointingHandCursor
+                        }
+                    }
+                }
+            }
+
+            Text {
+                visible: subtitleClient.hasApiKey && !subtitleClient.busy
+                       && subtitleClient.results.length === 0
+                text: qsTr("Nincs megjeleníthető találat.")
+                font.pixelSize: 12
+                color: Colors.textDim
+            }
+        }
+    }
+
+    // Connect the subtitle download completion to load the file into mpv.
+    Connections {
+        target: subtitleClient
+        function onDownloaded(path) {
+            if (path.length > 0) {
+                mpv.loadExternalSubtitle(path)
+                toastHost.show(qsTr("Felirat letöltve és betöltve"), "ok")
+            }
+        }
+        function onErrorOccurred(message) {
+            toastHost.show(message, "err")
         }
     }
 
@@ -1619,7 +1959,7 @@ ApplicationWindow {
         property QtObject meta: menu ? menu.metaInfo : null
         // The four tab scrollviews, addressed by tabIndex from the drawer's
         // wheel-forwarding (ids are component-scoped, hence this passthrough).
-        property var scrolls: [videoScroll, audioScroll, subScroll, pluginScroll]
+        property var scrolls: [videoScroll, audioScroll, subScroll, pluginScroll, keyScroll]
     Rectangle {
         anchors.fill: parent
         radius: 12
@@ -1670,14 +2010,15 @@ ApplicationWindow {
                     qsTr("Videó"),
                     qsTr("Hang"),
                     qsTr("Felirat"),
-                    qsTr("Kiegészítő")
+                    qsTr("Kiegészítő"),
+                    qsTr("Gyorsbillentyűk")
                 ]
                 Rectangle {
                     required property int index
                     required property string modelData
                     height: 26
                     radius: 6
-                    width: menu.width / 4 - 4
+                    width: menu.width / 5 - 4
                     color: (menu.tabIndex === index)
                            ? Colors.accent : (tabHover.containsMouse ? Colors.hover : "transparent")
                     Behavior on color { ColorAnimation { duration: 90 } }
@@ -1773,6 +2114,9 @@ ApplicationWindow {
                 ToggleRow { trLabel: qsTr("HDR"); trValue: mpv.hdrEnabled;
                 width: parent.width
                             onToggled: v => mpv.hdrEnabled = v }
+                ToggleRow { trLabel: qsTr("Kép előnézet a keresőnál"); trValue: thumbs.enabled;
+                width: parent.width
+                            onToggled: v => thumbs.enabled = v }
 
                 SectionLabel { text: qsTr("Videó színek") }
                 ValueSlider { vsLabel: qsTr("Fényerő");     vsValue: mpv.brightness;
@@ -2474,6 +2818,223 @@ ApplicationWindow {
                 Item { height: 8 }
             }
         }
+
+        // --- gyorsbillentyűk tab ----------------------------------------
+        Flickable {
+            id: keyScroll
+            visible: menu.tabIndex === 4
+            width: parent.width
+            height: parent.height - 72
+            clip: true
+            contentWidth: keyCol.width
+            contentHeight: keyCol.implicitHeight
+
+            // Sets the action whose binding the inline editor row captures.
+            property string recordingAction: ""
+
+            function keyText(event) {
+                let kt = ""
+                switch (event.key) {
+                case Qt.Key_Left:     kt = "Left"; break
+                case Qt.Key_Right:    kt = "Right"; break
+                case Qt.Key_Up:       kt = "Up"; break
+                case Qt.Key_Down:     kt = "Down"; break
+                case Qt.Key_Space:    kt = "Space"; break
+                case Qt.Key_Return:
+                case Qt.Key_Enter:    kt = "Return"; break
+                case Qt.Key_Delete:   kt = "Delete"; break
+                case Qt.Key_Backspace:kt = "Backspace"; break
+                case Qt.Key_Home:     kt = "Home"; break
+                case Qt.Key_End:      kt = "End"; break
+                case Qt.Key_PageUp:   kt = "PgUp"; break
+                case Qt.Key_PageDown: kt = "PgDown"; break
+                case Qt.Key_Escape:   kt = "Esc"; break
+                default:
+                    if (event.text.length === 1 && event.text.charCodeAt(0) < 0x250)
+                        kt = event.text.toUpperCase()
+                    else
+                        return ""
+                }
+                let parts = []
+                if (event.modifiers & Qt.ControlModifier) parts.push("Ctrl")
+                if (event.modifiers & Qt.AltModifier) parts.push("Alt")
+                if (event.modifiers & Qt.ShiftModifier && !/[A-Z0-9]/.test(kt) && kt !== "Space") parts.push("Shift")
+                parts.push(kt)
+                return parts.join("+")
+            }
+
+            Column {
+                id: keyCol
+                width: keyScroll.width
+                spacing: 8
+
+                SectionLabel { text: qsTr("Gyorsbillentyűk") }
+                Text {
+                    text: qsTr("Kattints egy sorra, majd nyomj új billentyűt a hozzárendeléshez. A beállított sorokban a ↺-kattintás visszaállítja az alapértelmezettet.")
+                    width: parent.width
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 11
+                    color: Colors.textDim
+                }
+
+                Repeater {
+                    model: keyMgr.actionIds
+                    delegate: Rectangle {
+                        width: keyCol.width
+                        height: 34
+                        radius: 8
+                        color: keyRowMouse.containsMouse ? Colors.hover : "transparent"
+                        border.color: Colors.border
+                        border.width: keyMgr.hasOverride(modelData) ? 1 : 1
+                        opacity: 1
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: 10
+                            anchors.rightMargin: 8
+                            spacing: 8
+
+                            Text {
+                                Layout.fillWidth: true
+                                Layout.alignment: Qt.AlignVCenter
+                                text: keyMgr.labelFor(modelData)
+                                color: keyMgr.hasOverride(modelData) ? Colors.accent : Colors.overlayText
+                                font.pixelSize: 12
+                                elide: Text.ElideRight
+                            }
+
+                            // Reset-to-default (only when an override exists)
+                            Rectangle {
+                                width: 22
+                                height: 22
+                                radius: 6
+                                visible: keyMgr.hasOverride(modelData)
+                                color: resetMouse.containsMouse ? Colors.hover : "transparent"
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "\u21BA"                       // ↺ anticlockwise
+                                    font.pixelSize: 11
+                                    color: Colors.accent
+                                }
+                                MouseArea {
+                                    id: resetMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    onClicked: {
+                                        keyMgr.resetBinding(modelData)
+                                        toastHost.show(qsTr("Alapértelmezett visszaállítva"), "ok")
+                                    }
+                                    cursorShape: Qt.PointingHandCursor
+                                }
+                            }
+
+                            // Editor pill: shows current binding, or captures.
+                            Rectangle {
+                                id: keyPill
+                                width: 84
+                                height: 24
+                                radius: 12
+                                color: keyScroll.recordingAction === modelData
+                                       ? "#26ffffff" : (keyPillMouse.containsMouse ? Colors.hover : "#18ffffff")
+                                border.color: keyScroll.recordingAction === modelData
+                                              ? Colors.accent : Colors.border
+                                border.width: 1
+
+                                Text {
+                                    visible: keyScroll.recordingAction !== modelData
+                                    anchors.centerIn: parent
+                                    text: keyMgr.binding(modelData) || qsTr("—")
+                                    color: keyPillMouse.containsMouse ? Colors.overlayText : Colors.textDim
+                                    font.pixelSize: 11
+                                }
+
+                                // Recording field: focused, captures one key.
+                                TextField {
+                                    visible: keyScroll.recordingAction === modelData
+                                    anchors.fill: parent
+                                    focus: keyScroll.recordingAction === modelData
+                                    placeholderText: qsTr("billentyű…")
+                                    placeholderTextColor: Colors.accent
+                                    font.pixelSize: 11
+                                    color: Colors.overlayText
+                                    verticalAlignment: Text.AlignVCenter
+                                    horizontalAlignment: Text.AlignHCenter
+                                    background: Rectangle {
+                                        color: "transparent"
+                                        radius: 12
+                                    }
+                                    Keys.onPressed: e => {
+                                        if (e.key === Qt.Key_Escape) {
+                                            keyScroll.recordingAction = ""
+                                            e.accepted = true
+                                            return
+                                        }
+                                        const seq = keyScroll.keyText(e)
+                                        if (seq === "") { e.accepted = true; return }
+                                        keyMgr.setBinding(modelData, seq)
+                                        keyScroll.recordingAction = ""
+                                        toastHost.show(qsTr("%1: %2").arg(keyMgr.labelFor(modelData)).arg(seq), "ok")
+                                        e.accepted = true
+                                    }
+                                }
+
+                                MouseArea {
+                                    id: keyPillMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    visible: keyScroll.recordingAction !== modelData
+                                    onClicked: keyScroll.recordingAction = modelData
+                                    cursorShape: Qt.PointingHandCursor
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    visible: keyScroll.recordingAction === modelData
+                                    onClicked: forceActiveFocus()
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Row {
+                    spacing: 8
+                    Rectangle {
+                        width: 130
+                        height: 30
+                        radius: 15
+                        color: resetAllMouse.containsMouse ? Colors.hover : "#26ffffff"
+                        border.color: Colors.border
+                        border.width: 1
+                        Text {
+                            anchors.centerIn: parent
+                            text: qsTr("Összes visszaállítása")
+                            font.pixelSize: 12
+                            color: resetAllMouse.containsMouse ? Colors.overlayText : Colors.textDim
+                        }
+                        MouseArea {
+                            id: resetAllMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            visible: keyMgr.modified
+                            onClicked: {
+                                keyMgr.resetAll()
+                                toastHost.show(qsTr("Minden gyorsbillentyű alaphelyzetben"), "ok")
+                            }
+                            cursorShape: Qt.PointingHandCursor
+                        }
+                    }
+                    Text {
+                        visible: !keyMgr.modified
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: qsTr("Minden gyorsbillentyű alapértelmezett.")
+                        font.pixelSize: 11
+                        color: Colors.textDim
+                    }
+                }
+
+                Item { height: 8 }
+            }
+        }
     }
         }
     }
@@ -2546,73 +3107,74 @@ ApplicationWindow {
         }
     }
 
-    // --- keyboard ----------------------------------------------------------------
-    Shortcut { sequence: "Space"; onActivated: {
+    // --- keyboard ------------------------------------------------------------
+    Shortcut { sequence: keyMgr.playPause; onActivated: {
         const willPause = mpv.playing
         mpv.togglePause()
         flashAction(willPause ? "\uF04C" : "\uF04B",
                     willPause ? qsTr("Szünet") : qsTr("Lejátszás"))
     } }
-    Shortcut { sequence: "Left"; onActivated: {
+    Shortcut { sequence: keyMgr.seekBackward; onActivated: {
         mpv.seekRelative(-5)
         flashAction("\uF048", "\u22125 mp")
     } }
-    Shortcut { sequence: "Right"; onActivated: {
+    Shortcut { sequence: keyMgr.seekForward; onActivated: {
         mpv.seekRelative(5)
         flashAction("\uF051", "+5 mp")
     } }
-    Shortcut { sequence: "Up"; onActivated: {
+    Shortcut { sequence: keyMgr.volumeUp; onActivated: {
         const newVol = Math.min(mpv.volume + 10, 150)
         mpv.setVolume(newVol)
         flashAction(volGlyph(newVol, mpv.muted), newVol + " %")
     } }
-    Shortcut { sequence: "Down"; onActivated: {
+    Shortcut { sequence: keyMgr.volumeDown; onActivated: {
         const newVol = Math.max(mpv.volume - 10, 0)
         mpv.setVolume(newVol)
         flashAction(volGlyph(newVol, mpv.muted), newVol + " %")
     } }
-    Shortcut { sequence: "M"; onActivated: {
+    Shortcut { sequence: keyMgr.mute; onActivated: {
         const muted = !mpv.muted
         mpv.toggleMute()
         flashAction(volGlyph(mpv.volume, muted), muted ? qsTr("Némítva") : qsTr("Hang"))
     } }
-    Shortcut { sequence: "F"; onActivated: root.toggleFullscreen() }
-    Shortcut { sequence: "I"; onActivated: mpv.toggleMinimize() }
-    Shortcut { sequence: "G"; onActivated: {
+    Shortcut { sequence: keyMgr.fullscreen; onActivated: root.toggleFullscreen() }
+    Shortcut { sequence: keyMgr.minimize; onActivated: mpv.toggleMinimize() }
+    Shortcut { sequence: keyMgr.settings; onActivated: {
         if (settingsMenu.visible) { settingsMenu.close(); return }
         openSettings()
     } }
-    Shortcut { sequence: "L"; onActivated: {
+    Shortcut { sequence: keyMgr.playlist; onActivated: {
         if (playlistPanel.visible) { playlistPanel.close(); return }
         openPlaylist()
     } }
-    Shortcut { sequence: "J"; onActivated: {
+    Shortcut { sequence: keyMgr.jellyfin; onActivated: {
         if (jellyfinPanel.visible) { jellyfinPanel.close(); return }
         openJellyfin()
     } }
     // Playback speed (mpv default bindings: halve / double).
-    Shortcut { sequence: "["; onActivated: {
+    Shortcut { sequence: keyMgr.speedHalve; onActivated: {
         mpv.speed = Math.max(0.25, mpv.speed / 2)
         flashAction("\uF0E7", mpv.speed.toFixed(2) + "\u00D7")
     } }
-    Shortcut { sequence: "]"; onActivated: {
+    Shortcut { sequence: keyMgr.speedDouble; onActivated: {
         mpv.speed = Math.min(4, mpv.speed * 2)
         flashAction("\uF0E7", mpv.speed.toFixed(2) + "\u00D7")
     } }
     // Playlist navigation (mpv): [n]ext / [p]revious.
-    Shortcut { sequence: "N"; onActivated: {
+    Shortcut { sequence: keyMgr.nextItem; onActivated: {
         mpv.playlistNext()
         flashAction("\uF051", qsTr("Következő"))
     } }
-    Shortcut { sequence: "P"; onActivated: {
+    Shortcut { sequence: keyMgr.prevItem; onActivated: {
         mpv.playlistPrevious()
         flashAction("\uF048", qsTr("Előző"))
     } }
-    Shortcut { sequence: "Delete"; onActivated: playlistPanel.removeSelected() }
-    Shortcut { sequence: "Ctrl+F"; onActivated: searchToggle.clicked() }
-    Shortcut { sequence: "Ctrl+O"; onActivated: openDialog.open() }
-    Shortcut { sequence: "Ctrl+S"; onActivated: mpv.takeScreenshot() }
-    Shortcut { sequence: "Esc"; onActivated: {
+    Shortcut { sequence: keyMgr.removeSelected; onActivated: playlistPanel.removeSelected() }
+    Shortcut { sequence: keyMgr.toggleSearch; onActivated: searchToggle.clicked() }
+    Shortcut { sequence: keyMgr.openFile; onActivated: openDialog.open() }
+    Shortcut { sequence: keyMgr.screenshot; onActivated: mpv.takeScreenshot() }
+    Shortcut { sequence: keyMgr.stats; onActivated: statsOverlay.open = !statsOverlay.open }
+    Shortcut { sequence: keyMgr.escape; onActivated: {
         if (settingsMenu.visible) { settingsMenu.close(); return }
         if (playlistPanel.visible) { playlistPanel.close(); return }
         if (jellyfinPanel.visible) { jellyfinPanel.close(); return }
@@ -2620,7 +3182,7 @@ ApplicationWindow {
         if (updatePopup.visible) { updatePopup.close(); return }
         if (root.isFullScreen) { root.isFullScreen = false; mpv.windowFullscreen(false) }
     } }
-    Shortcut { sequence: "Ctrl+0"; onActivated: {
+    Shortcut { sequence: keyMgr.volume100; onActivated: {
         mpv.setVolume(100)
         flashAction(volGlyph(100, mpv.muted), "100 %")
     } }

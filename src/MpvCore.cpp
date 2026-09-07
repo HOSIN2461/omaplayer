@@ -2070,6 +2070,64 @@ void MpvCore::clearMediaInfo()
     Q_EMIT mediaInfoChanged();
 }
 
+QVariantMap MpvCore::stats() const
+{
+    QVariantMap s;
+    if (!m_handle)
+        return s;
+
+    double d = 0.0;
+    if (mpv_get_property(m_handle, "estimated-vf-fps", MPV_FORMAT_DOUBLE, &d) == 0
+        && d > 0.0)
+        s[QStringLiteral("fps")] = d;
+
+    mpv_node vp{};
+    if (mpv_get_property(m_handle, "video-params", MPV_FORMAT_NODE, &vp) == 0) {
+        const QString codec = mpvNodeString(vp, "codec");
+        if (!codec.isEmpty())
+            s[QStringLiteral("videoCodec")] = codec;
+        const QString pixfmt = mpvNodeString(vp, "pixelformat");
+        if (!pixfmt.isEmpty())
+            s[QStringLiteral("pixelFormat")] = pixfmt;
+        const int w = mpvNodeInt(vp, "w", 0);
+        const int h = mpvNodeInt(vp, "h", 0);
+        if (w > 0 && h > 0) {
+            s[QStringLiteral("w")] = w;
+            s[QStringLiteral("h")] = h;
+        }
+        const double nfps = mpvNodeDouble(vp, "fps");
+        if (nfps > 0.0)
+            s[QStringLiteral("videoFps")] = nfps;
+        mpv_free_node_contents(&vp);
+    }
+
+    if (mpv_get_property(m_handle, "avsync", MPV_FORMAT_DOUBLE, &d) == 0)
+        s[QStringLiteral("avsync")] = d;
+
+    double vbr = 0.0, abr = 0.0;
+    if (mpv_get_property(m_handle, "video-bitrate", MPV_FORMAT_DOUBLE, &vbr) == 0 && vbr > 0.0)
+        s[QStringLiteral("videoBitrate")] = vbr;
+    if (mpv_get_property(m_handle, "audio-bitrate", MPV_FORMAT_DOUBLE, &abr) == 0 && abr > 0.0)
+        s[QStringLiteral("audioBitrate")] = abr;
+
+    QString str;
+    if (mpvNodeStringOut(m_handle, "hwdec-active", &str) && !str.isEmpty())
+        s[QStringLiteral("hwdec")] = str;
+    if (mpvNodeStringOut(m_handle, "container-format", &str) && !str.isEmpty())
+        s[QStringLiteral("container")] = str.toUpper();
+
+    long long ll = 0;
+    if (mpvNodeInt64(m_handle, "vo-drop-frame-count", &ll) && ll > 0)
+        s[QStringLiteral("dropped")] = ll;
+    else if (mpvNodeInt64(m_handle, "drop-frame-count", &ll) && ll > 0)
+        s[QStringLiteral("dropped")] = ll;
+
+    if (mpvNodeInt64(m_handle, "cache-buffering-state", &ll) && ll > 0)
+        s[QStringLiteral("buffering")] = ll;
+
+    return s;
+}
+
 void MpvCore::buildAudioEqFilter()
 {
     if (!m_handle)
