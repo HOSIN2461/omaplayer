@@ -48,8 +48,9 @@ int main(int argc, char *argv[])
     qunsetenv("QT_IM_MODULE");
 
     QApplication app(argc, argv);
-    // The player is a single floating window (the PiP window-set toggle was
-    // removed), so the default "quit when the (last) window closes" applies —
+    // The player is a single window by default (normal tiled window); the I
+    // shortcut ("Kis méret") floats + pins it into a small always-on-top
+    // corner box. So quitting when the last window closes is correct —
     // closing the window stops playback and exits the app (the tray menu's
     // "Kilépés" quits explicitly while hidden in the tray).
     // libmpv refuses to create a handle while LC_NUMERIC is non-C (it would
@@ -149,9 +150,9 @@ int main(int argc, char *argv[])
                      });
     engine.loadFromModule(QStringLiteral("Omaplayer"), QStringLiteral("Main"));
 
-    // Test hook: OMAPLAYER_WIN_W/H lets us launch the floating window at a
-    // given size (hyprctl resize is unusable on the Lua config). Overrides the
-    // normal size gracefully — set both, or neither is used.
+    // Test hook: OMAPLAYER_WIN_W/H lets us launch the window at a given size
+    // (useful for the headless test harness; overrides the normal size
+    // gracefully — set both, or neither is used).
     if (auto *win = qobject_cast<QQuickWindow *>(engine.rootObjects().value(0))) {
         const int tw = qEnvironmentVariableIntValue("OMAPLAYER_WIN_W");
         const int th = qEnvironmentVariableIntValue("OMAPLAYER_WIN_H");

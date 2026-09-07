@@ -1221,12 +1221,9 @@ void MpvCore::windowFullscreen(bool on)
         return;
     m_fsTransitioning = true;
     if (on) {
-        // omaplayer is a *pinned* ("always on top") floating window by window
-        // rule. Hyprland refuses to fullscreen a pinned window, and our float
-        // ignores the plain QWindow::FullScreen request, so we drive both the
-        // pin and the fullscreen through the Hyprland IPC (new DSL). Each step
-        // waits for the compositor to actually apply the previous one, since
-        // the dispatches can otherwise race and undo each other.
+        // A pinned window cannot be fullscreened; we drive both the unpin and
+        // the fullscreen through the Hyprland IPC (new DSL). This stays
+        // harmless for an unpinned normal window (unpin is a no-op there).
         dispatchHypr({ "dispatch", "hl.dsp.window.pin(false)" });
         whenHyprState(QStringLiteral("pinned"), "false", true, 1000, [this] {
             dispatchHypr({ "dispatch", "hl.dsp.window.fullscreen()" });
@@ -1237,7 +1234,8 @@ void MpvCore::windowFullscreen(bool on)
     } else {
         dispatchHypr({ "dispatch", "hl.dsp.window.fullscreen()" });
         whenHyprState(QStringLiteral("fullscreen"), "0", false, 1000, [this] {
-            dispatchHypr({ "dispatch", "hl.dsp.window.pin(true)" });
+            if (m_miniMode)
+                dispatchHypr({ "dispatch", "hl.dsp.window.pin(true)" });
             m_fsTransitioning = false;
         });
     }
@@ -1255,11 +1253,17 @@ void MpvCore::toggleMiniMode()
         return;
     m_miniTransitioning = true;
     if (m_miniMode) {
+        // Leave mini mode: back to a normal (tiled, not always-on-top) window.
+        dispatchHypr({ "dispatch", "hl.dsp.window.pin(false)" });
+        dispatchHypr({ "dispatch", "hl.dsp.window.float({ action = \"unset\" })" });
         applyWmResizeTo(640, 400);
         m_miniMode = false;
     } else {
-        // Qt-side best effort (harmless where the compositor honours it).
+        // Enter mini mode: float + pin so the small window stays on top of
+        // everything and can be moved around freely.
         m_renderWindow->resize(320, 200);
+        dispatchHypr({ "dispatch", "hl.dsp.window.float({ action = \"set\" })" });
+        dispatchHypr({ "dispatch", "hl.dsp.window.pin(true)" });
         applyWmResizeTo(320, 200);
         m_miniMode = true;
     }
