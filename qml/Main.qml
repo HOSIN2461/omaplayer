@@ -158,6 +158,17 @@ ApplicationWindow {
         // Shift+scroll) = seek. A pip floating window is small, so volume is
         // the most-used gesture; the seek timeline stays precise for seeking.
         onWheel: wheel => {
+            // While the pointer is over the settings drawer, the wheel belongs
+            // to its scroll views — never let it reach the volume/seek here.
+            if (settingsMenu.visible) {
+                const inX = wheel.x >= settingsMenu.x && wheel.x <= settingsMenu.x + settingsMenu.width
+                const inY = wheel.y >= settingsMenu.y && wheel.y <= settingsMenu.y + settingsMenu.height
+                if (inX && inY) {
+                    const ev = wheel.angleDelta.y !== 0 ? wheel.angleDelta.y : wheel.angleDelta.x
+                    settingsMenu.scrollBy(-ev)
+                    return
+                }
+            }
             const horiz = wheel.angleDelta.x !== 0 || (wheel.modifiers & Qt.ShiftModifier)
             const delta = horiz ? wheel.angleDelta.x !== 0 ? wheel.angleDelta.x : wheel.angleDelta.y
                                 : wheel.angleDelta.y
@@ -1540,6 +1551,10 @@ ApplicationWindow {
         Item {
         property MpvCore mpv: menu.coreMpv
         property QtObject menu: parent ? parent.parent : null
+        property QtObject meta: menu ? menu.metaInfo : null
+        // The four tab scrollviews, addressed by tabIndex from the drawer's
+        // wheel-forwarding (ids are component-scoped, hence this passthrough).
+        property var scrolls: [videoScroll, audioScroll, subScroll, pluginScroll]
     Rectangle {
         anchors.fill: parent
         radius: 12
@@ -1589,14 +1604,15 @@ ApplicationWindow {
                 model: [
                     qsTr("Videó"),
                     qsTr("Hang"),
-                    qsTr("Felirat")
+                    qsTr("Felirat"),
+                    qsTr("Kiegészítő")
                 ]
                 Rectangle {
                     required property int index
                     required property string modelData
                     height: 26
                     radius: 6
-                    width: menu.width / 3 - 4
+                    width: menu.width / 4 - 4
                     color: (menu.tabIndex === index)
                            ? Colors.accent : (tabHover.containsMouse ? Colors.hover : "transparent")
                     Behavior on color { ColorAnimation { duration: 90 } }
@@ -1641,125 +1657,6 @@ ApplicationWindow {
                     width: parent.width
                 }
 
-                SectionLabel { text: qsTr("Képarány") }
-                SegmentRow {
-                    width: parent.width
-                    segItems: [
-                        { label: qsTr("Alap"), value: "no" },
-                        { label: "4:3", value: "4:3" },
-                        { label: "16:9", value: "16:9" },
-                        { label: "16:10", value: "16:10" },
-                        { label: "21:9", value: "21:9" },
-                        { label: "5:4", value: "5:4" }
-                    ]
-                    segCurrent: mpv.videoAspect === "" ? "no" : mpv.videoAspect
-                    onPick: v => mpv.setVideoAspect(v)
-                }
-
-                SectionLabel { text: qsTr("Körbevágás") }
-                SegmentRow {
-                    width: parent.width
-                    segItems: [
-                        { label: qsTr("Alap"), value: "" },
-                        { label: "4:3", value: "4:3" },
-                        { label: "16:9", value: "16:9" },
-                        { label: "16:10", value: "16:10" },
-                        { label: "21:9", value: "21:9" },
-                        { label: "5:4", value: "5:4" },
-                        { label: qsTr("Egyéni"), value: "custom" }
-                    ]
-                    segCurrent: menu.cropAspect
-                    onPick: v => menu.pickCrop(v)
-                }
-
-                Row {
-                    visible: menu.customCropOpen
-                    width: parent.width
-                    spacing: 6
-
-                    TextField {
-                        id: cropWField
-                        width: 90
-                        placeholderText: qsTr("Szélesség")
-                        placeholderTextColor: Colors.textDim
-                        color: Colors.overlayText
-                        font.pixelSize: 12
-                        topPadding: 6
-                        bottomPadding: 6
-                        validator: IntValidator { bottom: 1; top: 999999 }
-                        onActiveFocusChanged: if (activeFocus) Qt.inputMethod.reset()
-                        background: Rectangle {
-                            radius: 7
-                            color: Colors.chrome
-                            border.color: cropWField.activeFocus ? Colors.accent : Colors.border
-                        }
-                    }
-                    TextField {
-                        id: cropHField
-                        width: 90
-                        placeholderText: qsTr("Magasság")
-                        placeholderTextColor: Colors.textDim
-                        color: Colors.overlayText
-                        font.pixelSize: 12
-                        topPadding: 6
-                        bottomPadding: 6
-                        // No inputMask: its blank fill ("     ") puts the cursor
-                        // past the last slot, so typing is rejected until a
-                        // backspace — annoying. Validator keeps digits only.
-                        validator: IntValidator { bottom: 1; top: 999999 }
-                        // The compositor's text-input context must rebind to the
-                        // newly focused editor, otherwise commits keep targeting
-                        // the previous field (mask-full W rejects them).
-                        onActiveFocusChanged: if (activeFocus) Qt.inputMethod.reset()
-                        background: Rectangle {
-                            radius: 7
-                            color: Colors.chrome
-                            border.color: cropHField.activeFocus ? Colors.accent : Colors.border
-                        }
-                    }
-                    Item { width: parent.width }
-                    Rectangle {
-                        id: customCropBtn
-                        width: 76
-                        height: 28
-                        radius: 14
-                        color: customCropHover.containsMouse || customCropHover.pressed
-                               ? Colors.accent : Colors.accent
-                        Text {
-                            anchors.centerIn: parent
-                            text: qsTr("Vágás")
-                            font.pixelSize: 12
-                            font.weight: Font.DemiBold
-                            color: "#0b0b0e"
-                        }
-                        MouseArea {
-                            id: customCropHover
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            onClicked: {
-                                const w = parseInt(cropWField.text, 10)
-                                const h = parseInt(cropHField.text, 10)
-                                if (w > 0 && h > 0) {
-                                    mpv.setCustomVideoCrop(w, h)
-                                    menu.cropAspect = "custom"
-                                    menu.customCropOpen = false
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Connections {
-                    target: menu
-                    function onCustomCropOpenChanged() {
-                        if (menu.customCropOpen) {
-                            cropWField.clear()
-                            cropHField.clear()
-                            cropWField.forceActiveFocus()
-                        }
-                    }
-                }
-
                 SectionLabel { text: qsTr("Elforgatás") }
                 SegmentRow {
                     width: parent.width
@@ -1778,94 +1675,6 @@ ApplicationWindow {
                 width: parent.width
                               vsInteger: true; vsValue: Math.round(mpv.speed * 100);
                               onChanged: v => mpv.speed = v / 100 }
-
-ToggleRow { trLabel: qsTr("Intro/Stáblista automatikus átugrása"); trValue: mpv.autoSkip;
-                width: parent.width
-                            onToggled: v => mpv.autoSkip = v }
-
-ToggleRow { trLabel: qsTr("Audio-hasonlóság érzékelés (fejezet nélküli epizódok)");
-                width: parent.width
-                            trValue: mpv.audioDetection;
-                            onToggled: v => mpv.audioDetection = v }
-
-                SectionLabel { text: qsTr("Információ (szünet)") }
-                ToggleRow { trLabel: qsTr("Metaadat kártya szünetnél"); trValue: meta.overlayEnabled;
-                            onToggled: v => meta.overlayEnabled = v }
-                SectionLabel { text: qsTr("Metaadat forrás sorrendje") }
-                SegmentRow {
-                    width: parent.width
-                    segItems: [
-                        { label: "TMDB", value: "tmdb" },
-                        { label: "TVMaze", value: "tvmaze" },
-                        { label: "iTunes", value: "itunes" }
-                    ]
-                    segCurrent: meta.providers.primary
-                    onPick: v => meta.setPrimaryProvider(v)
-                }
-                ToggleRow { trLabel: qsTr("TMDB (API kulcs)"); trValue: meta.providers.tmdb === true;
-                            onToggled: v => meta.setProviderEnabled("tmdb", v) }
-                ToggleRow { trLabel: qsTr("TVMaze (kulcs nélkül)"); trValue: meta.providers.tvmaze === true;
-                            onToggled: v => meta.setProviderEnabled("tvmaze", v) }
-                ToggleRow { trLabel: qsTr("iTunes (kulcs nélkül)"); trValue: meta.providers.itunes === true;
-                            onToggled: v => meta.setProviderEnabled("itunes", v) }
-                RowLayout {
-                    width: parent.width
-                    spacing: 8
-                    TextField {
-                        id: keyFieldId
-                        Layout.fillWidth: true
-                        placeholderText: qsTr("TMDB API kulcs (lokális fájlok)")
-                        text: meta.tmdbKey
-                        color: Colors.overlayText
-                        font.pixelSize: 11
-                        topPadding: 7
-                        bottomPadding: 7
-                        leftPadding: 10
-                        rightPadding: 10
-                        selectByMouse: true
-                        onEditingFinished: meta.tmdbKey = text
-                        background: Rectangle {
-                            radius: 9
-                            color: "#26ffffff"
-                            border.color: keyFieldId.activeFocus ? Colors.borderGlow : Colors.border
-                            border.width: 1
-                        }
-                        placeholderTextColor: Colors.textDim
-                        MouseArea {
-                            anchors.fill: parent
-                            acceptedButtons: Qt.LeftButton
-                            onPressed: parent.forceActiveFocus()
-                        }
-                    }
-                    Button {
-                        id: control
-                        text: qsTr("Kulcs mentés")
-                        font.pixelSize: 11
-                        implicitHeight: 28
-                        contentItem: Text {
-                            text: control.text
-                            color: control.pressed ? Colors.accent
-                                 : control.hovered ? Colors.overlayText
-                                 : Colors.textDim
-                            font.pixelSize: 11
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                            Behavior on color { ColorAnimation { duration: 110 } }
-                        }
-                        onClicked: {
-                            meta.tmdbKey = keyFieldId.text
-                            keyFieldId.focus = false
-                        }
-                        background: Rectangle {
-                            radius: 14
-                            color: control.hovered || control.pressed ? Colors.hover : "#26ffffff"
-                            border.color: control.hovered ? Colors.borderGlow : Colors.border
-                            border.width: 1
-                            scale: control.pressed ? 0.93 : 1
-                            Behavior on scale { NumberAnimation { duration: 110; easing.type: Easing.OutCubic } }
-                        }
-                    }
-                }
 
                 ToggleRow { trLabel: qsTr("Hardveres dekódolás"); trValue: mpv.hwdecEnabled;
                 width: parent.width
@@ -1940,6 +1749,17 @@ ToggleRow { trLabel: qsTr("Audio-hasonlóság érzékelés (fejezet nélküli ep
             contentWidth: audioCol.width
             contentHeight: audioCol.implicitHeight
 
+            // True when the live EQ gains equal a preset's (within tolerance).
+            function eqMatches(g) {
+                const a = mpv.audioEqGains
+                if (a.length !== g.length)
+                    return false
+                for (let i = 0; i < g.length; ++i)
+                    if (Math.abs(Number(a[i]) - g[i]) > 0.05)
+                        return false
+                return true
+            }
+
             Column {
                 id: audioCol
                 width: audioScroll.width
@@ -1999,89 +1819,123 @@ ToggleRow { trLabel: qsTr("Audio-hasonlóság érzékelés (fejezet nélküli ep
                               onChanged: v => mpv.audioDelay = v / 1000 }
 
                 SectionLabel { text: qsTr("Hangszínszabályzó") }
-                Repeater {
-                    model: 10
-                    Row {
-                        required property int index
-                        width: audioScroll.width - 24
-                        height: 26
-                        spacing: 8
-                        Text {
-                            text: menu.eqFreqs[index]
-                            width: 34
-                            color: Colors.textDim
-                            font.pixelSize: 11
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
-                        Slider {
-                            id: eqSlider
-                            width: parent.width - 34 - 46
-                            height: 24
-                            from: -20
-                            to: 20
-                            stepSize: 1
-                            value: mpv.audioEqGains.length > index ? mpv.audioEqGains[index] : 0
-                            onMoved: mpv.setAudioEqBand(index, value)
-
-                            background: Item {
-                                implicitHeight: 16
-                                Rectangle {
-                                    anchors.fill: parent
-                                    height: 4
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    radius: 2
-                                    color: Colors.track
-                                }
-                                Rectangle {
-                                    width: eqSlider.visualPosition * parent.width
-                                    anchors { left: parent.left; verticalCenter: parent.verticalCenter }
-                                    height: 4
-                                    radius: 2
-                                    color: Colors.accent
-                                }
+                Text {
+                    text: qsTr("Előre definiált presetek és függőleges sávok.")
+                    color: Colors.textDim
+                    font.pixelSize: 11
+                    width: parent.width
+                }
+                Grid {
+                    id: presetGrid
+                    width: parent.width
+                    columns: 2
+                    columnSpacing: 6
+                    rowSpacing: 6
+                    Repeater {
+                        model: [
+                            { t: qsTr("Alap"), g: [0,0,0,0,0,0,0,0,0,0] },
+                            { t: qsTr("Pop"), g: [-1.5,2,4.5,3,0.5,-1,-1.5,-1,-0.5,-0.5] },
+                            { t: qsTr("Rock"), g: [4.5,3.5,-1,-2,-1.5,1.5,3.5,4,4,4] },
+                            { t: qsTr("Tánc"), g: [5,4,2.5,0,-1,-1,-1,0,1.5,3] },
+                            { t: qsTr("Klasszikus"), g: [4,3,2,1,-1,-1,0.5,1.5,2.5,3] },
+                            { t: qsTr("Élő"), g: [-1.5,0,2.5,3,3,3,2,2.5,3,2] }
+                        ]
+                        delegate: Rectangle {
+                            required property var modelData
+                            property bool active: audioScroll.eqMatches(modelData.g)
+                            width: (presetGrid.width - presetGrid.columnSpacing) / 2
+                            height: 28
+                            radius: 14
+                            color: active ? Colors.accent
+                                 : (presetHover.containsMouse ? Colors.hover : "#26ffffff")
+                            border.color: active ? "transparent" : Colors.border
+                            border.width: 1
+                            Behavior on color { ColorAnimation { duration: 110 } }
+                            Text {
+                                id: presetText
+                                anchors.centerIn: parent
+                                text: parent.modelData.t
+                                font.pixelSize: 12
+                                color: parent.active ? "#0b0b0e" : Colors.textDim
                             }
-                            handle: Rectangle {
-                                x: eqSlider.leftPadding + eqSlider.visualPosition * (eqSlider.availableWidth - width)
-                                y: eqSlider.topPadding + (eqSlider.availableHeight - height) / 2
-                                width: 12
-                                height: 12
-                                radius: 6
-                                color: eqSlider.hovered || eqSlider.dragging ? "#ffffff" : Colors.hover
-                                border.color: Colors.accent
-                                border.width: 2
+                            MouseArea {
+                                id: presetHover
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                onClicked: mpv.setAudioEqGains(parent.modelData.g)
                             }
-                        }
-                        Text {
-                            text: (mpv.audioEqGains.length > index ? mpv.audioEqGains[index] : 0).toFixed(0) + " dB"
-                            width: 32
-                            color: Colors.textDim
-                            font.pixelSize: 10
-                            horizontalAlignment: Text.AlignRight
-                            anchors.verticalCenter: parent.verticalCenter
                         }
                     }
                 }
-                RowLayout {
-                    width: parent.width
 
-                    Item { Layout.fillWidth: true }
-                    Rectangle {
-                        id: eqResetBtn
-                        width: 120
-                        height: 28
-                        radius: 14
-                        color: eqResetHover.containsMouse ? Colors.hover : "transparent"
+                Row {
+                    width: parent.width
+                    spacing: 2
+                    Repeater {
+                        model: 10
                         Text {
-                            anchors.centerIn: parent
-                            text: qsTr("EQ alaphelyzet")
-                            font.pixelSize: 12
-                            color: eqResetHover.containsMouse ? Colors.overlayText : Colors.textDim
+                            required property int index
+                            width: (parent.width - parent.spacing * 9) / 10
+                            text: (mpv.audioEqGains.length > index ? mpv.audioEqGains[index] : 0).toFixed(1) + " dB"
+                            color: Colors.textDim
+                            font.pixelSize: 9
+                            horizontalAlignment: Text.AlignHCenter
                         }
-                        MouseArea {
-                            id: eqResetHover
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            onClicked: mpv.resetAudioEq()
+                    }
+                }
+                Row {
+                    id: eqRow
+                    width: parent.width
+                    height: 108
+                    spacing: 2
+                    property real bw: (width - spacing * 9) / 10
+                    Repeater {
+                        model: 10
+                        Column {
+                            required property int index
+                            width: eqRow.bw
+                            height: parent.height
+                            spacing: 2
+
+                            Slider {
+                                id: bs
+                                width: parent.width
+                                height: 88
+                                orientation: Qt.Vertical
+                                // from>to: the widget maps larger Y to a larger
+                                // position, so the range is flipped to get a
+                                // natural "up = louder" feel.
+                                from: 20
+                                to: -20
+                                stepSize: 1
+                                value: mpv.audioEqGains.length > index ? mpv.audioEqGains[index] : 0
+                                onMoved: mpv.setAudioEqBand(index, value)
+
+                                background: Rectangle {
+                                    x: bs.leftPadding + (bs.availableWidth - width) / 2
+                                    y: bs.topPadding
+                                    width: 5
+                                    height: bs.availableHeight
+                                    radius: 3
+                                    color: Colors.track
+                                }
+                                handle: Rectangle {
+                                    x: bs.leftPadding + (bs.availableWidth - width) / 2
+                                    y: bs.topPadding + bs.visualPosition * (bs.availableHeight - height)
+                                    width: 14
+                                    height: 14
+                                    radius: 7
+                                    color: bs.hovered || bs.dragging ? "#ffffff" : Colors.hover
+                                    border.color: Colors.accent
+                                    border.width: 2
+                                }
+                            }
+                            Text {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                text: menu.eqFreqs[index]
+                                color: Colors.textDim
+                                font.pixelSize: 10
+                            }
                         }
                     }
                 }
@@ -2278,6 +2132,171 @@ ToggleRow { trLabel: qsTr("Audio-hasonlóság érzékelés (fejezet nélküli ep
                 Item { height: 8 }
             }
         }
+
+        // --- kiegészítő / plugin tab -----------------------------------
+        Flickable {
+            id: pluginScroll
+            visible: menu.tabIndex === 3
+            width: parent.width
+            height: parent.height - 72
+            clip: true
+            contentWidth: pluginCol.width
+            contentHeight: pluginCol.implicitHeight
+
+            Column {
+                id: pluginCol
+                width: pluginScroll.width
+                spacing: 8
+
+                SectionLabel { text: qsTr("Automatikák") }
+                ToggleRow { trLabel: qsTr("Intro/Stáblista automatikus átugrása"); trValue: mpv.autoSkip;
+                            onToggled: v => mpv.autoSkip = v }
+                ToggleRow { trLabel: qsTr("Audio-hasonlóság érzékelés (fejezet nélküli epizódok)");
+                            trValue: mpv.audioDetection;
+                            onToggled: v => mpv.audioDetection = v }
+
+                SectionLabel { text: qsTr("Metaadat kártya") }
+                ToggleRow { trLabel: qsTr("Info kártya szünetnél"); trValue: meta.overlayEnabled;
+                            onToggled: v => meta.overlayEnabled = v }
+
+                SectionLabel { text: qsTr("Metaadat források (keresési sorrend)") }
+                Repeater {
+                    model: meta.providerOrder
+                    delegate: RowLayout {
+                        required property string modelData
+                        required property int index
+                        width: pluginScroll.width - 8
+                        height: 26
+                        spacing: 8
+
+                        Text {
+                            width: 16
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: index + 1
+                            color: Colors.accent
+                            font.pixelSize: 11
+                            font.weight: Font.DemiBold
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: ({ tmdb: qsTr("TMDB (API kulcs)"),
+                                     tvmaze: qsTr("TVMaze (kulcs nélkül)"),
+                                     itunes: qsTr("iTunes (kulcs nélkül)") })[modelData] || modelData
+                            color: Colors.overlayText
+                            font.pixelSize: 12
+                            elide: Text.ElideRight
+                        }
+                        Rectangle {
+                            width: 30
+                            height: 26
+                            radius: 6
+                            opacity: index > 0 ? 1 : 0.3
+                            color: upArrow.containsMouse ? Colors.hover : "transparent"
+                            Text {
+                                anchors.centerIn: parent
+                                text: "\u25B2"
+                                font.pixelSize: 10
+                                color: index > 0 ? Colors.overlayText : Colors.textDim
+                            }
+                            MouseArea {
+                                id: upArrow
+                                anchors.fill: parent
+                                enabled: index > 0
+                                onClicked: meta.moveProvider(modelData, -1)
+                            }
+                        }
+                        Rectangle {
+                            width: 30
+                            height: 26
+                            radius: 6
+                            opacity: index < meta.providerOrder.length - 1 ? 1 : 0.3
+                            color: downArrow.containsMouse ? Colors.hover : "transparent"
+                            Text {
+                                anchors.centerIn: parent
+                                text: "\u25BC"
+                                font.pixelSize: 10
+                                color: index < meta.providerOrder.length - 1 ? Colors.overlayText : Colors.textDim
+                            }
+                            MouseArea {
+                                id: downArrow
+                                anchors.fill: parent
+                                enabled: index < meta.providerOrder.length - 1
+                                onClicked: meta.moveProvider(modelData, 1)
+                            }
+                        }
+                    }
+                }
+                ToggleRow { trLabel: qsTr("TMDB engedélyezése"); trValue: meta.providers.tmdb === true;
+                            onToggled: v => meta.setProviderEnabled("tmdb", v) }
+                ToggleRow { trLabel: qsTr("TVMaze engedélyezése"); trValue: meta.providers.tvmaze === true;
+                            onToggled: v => meta.setProviderEnabled("tvmaze", v) }
+                ToggleRow { trLabel: qsTr("iTunes engedélyezése"); trValue: meta.providers.itunes === true;
+                            onToggled: v => meta.setProviderEnabled("itunes", v) }
+
+                SectionLabel { text: qsTr("TMDB API kulcs") }
+                RowLayout {
+                    width: parent.width
+                    spacing: 8
+                    TextField {
+                        id: tmdbKeyField
+                        Layout.fillWidth: true
+                        placeholderText: qsTr("TMDB API kulcs (lokális fájlok)")
+                        text: meta.tmdbKey
+                        color: Colors.overlayText
+                        font.pixelSize: 11
+                        topPadding: 7
+                        bottomPadding: 7
+                        leftPadding: 10
+                        rightPadding: 10
+                        selectByMouse: true
+                        onEditingFinished: meta.tmdbKey = text
+                        background: Rectangle {
+                            radius: 9
+                            color: "#26ffffff"
+                            border.color: tmdbKeyField.activeFocus ? Colors.borderGlow : Colors.border
+                            border.width: 1
+                        }
+                        placeholderTextColor: Colors.textDim
+                        MouseArea {
+                            anchors.fill: parent
+                            acceptedButtons: Qt.LeftButton
+                            onPressed: parent.forceActiveFocus()
+                        }
+                    }
+                    Button {
+                        id: keySaveBtn
+                        text: qsTr("Mentés")
+                        font.pixelSize: 11
+                        implicitHeight: 28
+                        contentItem: Text {
+                            text: keySaveBtn.text
+                            color: keySaveBtn.pressed ? Colors.accent
+                                 : keySaveBtn.hovered ? Colors.overlayText
+                                 : Colors.textDim
+                            font.pixelSize: 11
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                            Behavior on color { ColorAnimation { duration: 110 } }
+                        }
+                        onClicked: {
+                            meta.tmdbKey = tmdbKeyField.text
+                            tmdbKeyField.focus = false
+                        }
+                        background: Rectangle {
+                            radius: 14
+                            color: keySaveBtn.hovered || keySaveBtn.pressed ? Colors.hover : "#26ffffff"
+                            border.color: keySaveBtn.hovered ? Colors.borderGlow : Colors.border
+                            border.width: 1
+                            scale: keySaveBtn.pressed ? 0.93 : 1
+                            Behavior on scale { NumberAnimation { duration: 110; easing.type: Easing.OutCubic } }
+                        }
+                    }
+                }
+
+                Item { height: 8 }
+            }
+        }
     }
         }
     }
@@ -2297,12 +2316,23 @@ ToggleRow { trLabel: qsTr("Audio-hasonlóság érzékelés (fejezet nélküli ep
         // keyboard focus (and G/L/Esc) stay on the main window.
 
         property MpvCore coreMpv: root.mpv
+        property QtObject metaInfo: meta
         property int tabIndex: 0
-        property string cropAspect: ""
-        property bool customCropOpen: false
         property var audioTracks: []
         property var subTracks: []
         property var eqFreqs: ["31","62","125","250","500","1k","2k","4k","8k","16k"]
+
+        // The active scrollview for the current tab, driven by the global
+        // wheel handler so the drawer never leaks volume/seek gestures.
+        property Item activeScroll: settingsContentHost.item
+                                    ? settingsContentHost.item.scrolls[tabIndex] : null
+        function scrollBy(delta) {
+            if (activeScroll) {
+                activeScroll.contentY = Math.max(0, Math.min(
+                    activeScroll.contentHeight - activeScroll.height,
+                    activeScroll.contentY - delta))
+            }
+        }
 
         function open() {
             refreshAudioTracks()
@@ -2310,20 +2340,6 @@ ToggleRow { trLabel: qsTr("Audio-hasonlóság érzékelés (fejezet nélküli ep
             visible = true
         }
         function close() { visible = false }
-
-        function pickCrop(v) {
-            if (v === "custom") {
-                customCropOpen = !customCropOpen
-                return
-            }
-            customCropOpen = false
-            cropAspect = v
-            if (v === "") {
-                mpv.clearVideoCrop()
-            } else {
-                mpv.setVideoCropAspect(v)
-            }
-        }
 
         function refreshAudioTracks() { audioTracks = mpv.audioTracks() }
         function refreshSubTracks() { subTracks = mpv.subtitleTracks() }
@@ -2335,6 +2351,7 @@ ToggleRow { trLabel: qsTr("Audio-hasonlóság érzékelés (fejezet nélküli ep
         }
 
         Loader {
+            id: settingsContentHost
             anchors.fill: parent
             active: visible
             sourceComponent: settingsContent

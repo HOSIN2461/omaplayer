@@ -191,7 +191,7 @@ public:
     Q_INVOKABLE void setAudioEqBand(int index, double gain);
     Q_INVOKABLE void resetAudioEq();
     Q_INVOKABLE void loadExternalAudio(const QString &path);
-    void setAudioEqGains(const QVariantList &gains);
+    Q_INVOKABLE void setAudioEqGains(const QVariantList &gains);
 
     // --- subtitles -------------------------------------------------------
     Q_INVOKABLE QVariantList subtitleTracks();

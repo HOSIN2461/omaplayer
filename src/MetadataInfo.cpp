@@ -136,6 +136,29 @@ void MetadataInfo::setProviderEnabled(const QString &name, bool on)
     Q_EMIT providersChanged();
 }
 
+QVariantList MetadataInfo::providerOrder() const
+{
+    QVariantList l;
+    for (const QString &p : orderedProviders())
+        l.append(p);
+    return l;
+}
+
+void MetadataInfo::moveProvider(const QString &name, int dir)
+{
+    QStringList o = orderedProviders();
+    const int i = o.indexOf(name);
+    if (i < 0)
+        return;
+    const int j = i + dir;
+    if (j < 0 || j >= o.size())
+        return;
+    o.swapItemsAt(i, j);
+    QSettings s;
+    s.setValue(QStringLiteral("metadata/primary"), o.first());
+    Q_EMIT providersChanged();
+}
+
 QStringList MetadataInfo::orderedProviders() const
 {
     const QString primary = providers().value(QLatin1String("primary")).toString();

@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QString>
 #include <QStringList>
+#include <QVariantList>
 #include <QVariantMap>
 #include <QJsonObject>
 
@@ -56,6 +57,10 @@ public:
     QVariantMap providers() const;
     Q_INVOKABLE void setPrimaryProvider(const QString &name);
     Q_INVOKABLE void setProviderEnabled(const QString &name, bool on);
+    // Enabled providers in search order — the top entry is tried first.
+    Q_PROPERTY(QVariantList providerOrder READ providerOrder NOTIFY providersChanged)
+    QVariantList providerOrder() const;
+    Q_INVOKABLE void moveProvider(const QString &name, int dir);
 
     // Builds the info map straight from a Jellyfin item normalized by
     // JellyfinClient (it already carries overview/genres/rating/provider ids).
