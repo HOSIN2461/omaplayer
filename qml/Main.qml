@@ -18,12 +18,9 @@ ApplicationWindow {
     // `playerCore` context property — NOT a fresh `MpvCore {}`, so the video
     // item, control bar, shortcuts and stats overlay all share one object).
     property MpvCore mpv: playerCore
-    property bool autoPip: Qt.application.arguments.indexOf("--pip") >= 0
-    // The player is a compact floating window by design (float + pin via the
-    // Hyprland rule); the much bigger "windowed" mode below would feel like a
-    // second PiP, so there is no dedicated PiP toggle any more.
-    property int pipW: 360
-    property int pipH: 203
+    // "Kis méret" (I) floats + pins the window mini-mode via hyprctl; there
+    // is no separate PiP *window* any more (the old --pip/pipW/pipH leftovers
+    // were removed). Normal mode is a regular tiled window.
 
 
     title: mpv.mediaTitle.length > 0 ? mpv.mediaTitle : qsTr("Omaplayer")
