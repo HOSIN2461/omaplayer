@@ -213,6 +213,80 @@ ApplicationWindow {
     }
 
     // --- interaction layer, below the control bar -----------------------------
+    // --- key recording capture ----------------------------------------------
+    // Full-window overlay that grabs every key while a binding is being
+    // recorded. `Keys` only works on Items, not on the Window itself, and
+    // tucking the handler deep inside the drawer lost the focus battle — so
+    // this top-level Item (focus:true + visible while recording) *always* wins
+    // the key event. Rectangles do not eat mouse events, so the drawer below
+    // stays fully interactive.
+    Rectangle {
+        id: keyCapture
+        anchors.fill: parent
+        color: "transparent"
+        z: 1
+        visible: root.recordingAction !== ""
+        focus: visible
+        Keys.enabled: root.recordingAction !== ""
+
+        Keys.onPressed: e => {
+            e.accepted = true
+            if (e.key === Qt.Key_Escape) {
+                root.stopKeyRecording()
+                return
+            }
+            const seq = root.keyText(e)
+            if (seq === "")
+                return
+            keyMgr.setBinding(root.recordingAction, seq)
+            toastHost.show(qsTr("%1: %2")
+                .arg(keyMgr.labelFor(root.recordingAction)).arg(seq), "ok")
+            root.stopKeyRecording()
+        }
+    }
+
+    // Map a QKeyEvent to the Shortcut-style sequence ("Ctrl+P", "Left"…).
+    // Key codes are used (not event.text) so Ctrl+letter yields "Ctrl+B"
+    // instead of a control character.
+    function keyText(event) {
+        let kt = ""
+        const k = event.key
+        switch (k) {
+        case Qt.Key_Left:     kt = "Left"; break
+        case Qt.Key_Right:    kt = "Right"; break
+        case Qt.Key_Up:       kt = "Up"; break
+        case Qt.Key_Down:     kt = "Down"; break
+        case Qt.Key_Space:    kt = "Space"; break
+        case Qt.Key_Return:
+        case Qt.Key_Enter:    kt = "Return"; break
+        case Qt.Key_Delete:   kt = "Delete"; break
+        case Qt.Key_Backspace:kt = "Backspace"; break
+        case Qt.Key_Home:     kt = "Home"; break
+        case Qt.Key_End:      kt = "End"; break
+        case Qt.Key_PageUp:   kt = "PgUp"; break
+        case Qt.Key_PageDown: kt = "PgDown"; break
+        default:
+            if (k >= Qt.Key_A && k <= Qt.Key_Z)
+                kt = String.fromCharCode(k)
+            else if (k >= Qt.Key_0 && k <= Qt.Key_9)
+                kt = String.fromCharCode(k)
+            else if (k >= Qt.Key_F1 && k <= Qt.Key_F12)
+                kt = "F" + (k - Qt.Key_F1 + 1)
+            else
+                return ""
+        }
+        let parts = []
+        if (event.modifiers & Qt.ControlModifier) parts.push("Ctrl")
+        if (event.modifiers & Qt.AltModifier) parts.push("Alt")
+        if (event.modifiers & Qt.ShiftModifier && !/[A-Z0-9]/.test(kt) && kt !== "Space") parts.push("Shift")
+        parts.push(kt)
+        return parts.join("+")
+    }
+
+    function stopKeyRecording() {
+        recordingAction = ""
+        keyRecorderActive = false
+    }
     MouseArea {
         id: gestures
 
@@ -1254,6 +1328,9 @@ ApplicationWindow {
     // disabled then so the pressed key reaches the recorder instead of firing
     // the action it would normally trigger.
     property bool keyRecorderActive: false
+    // The action currently being recorded, or "" when idle. Single source of
+    // truth for the recorder UI and the window-level key capture.
+    property string recordingAction: ""
     // Both side drawers share one width so they swap size-for-size.
     readonly property real drawerWidth: Math.max(240, Math.min(380, Math.round(root.width * 0.62)))
 
@@ -2867,49 +2944,18 @@ ApplicationWindow {
             contentWidth: keyCol.width
             contentHeight: keyCol.implicitHeight
 
-            // The action whose binding the recorder bar captures next.
-            property string recordingAction: ""
-
             // Leaving the tab (or any hiding) cancels an in-flight recording
             // so the global Shortcuts re-enable.
             onVisibleChanged: if (!visible) stopRecording()
 
             function stopRecording() {
-                recordingAction = ""
+                root.recordingAction = ""
                 root.keyRecorderActive = false
             }
 
-            // Map a QKeyEvent to the Shortcut-style sequence ("Ctrl+P", "Left"…).
-            function keyText(event) {
-                let kt = ""
-                switch (event.key) {
-                case Qt.Key_Left:     kt = "Left"; break
-                case Qt.Key_Right:    kt = "Right"; break
-                case Qt.Key_Up:       kt = "Up"; break
-                case Qt.Key_Down:     kt = "Down"; break
-                case Qt.Key_Space:    kt = "Space"; break
-                case Qt.Key_Return:
-                case Qt.Key_Enter:    kt = "Return"; break
-                case Qt.Key_Delete:   kt = "Delete"; break
-                case Qt.Key_Backspace:kt = "Backspace"; break
-                case Qt.Key_Home:     kt = "Home"; break
-                case Qt.Key_End:      kt = "End"; break
-                case Qt.Key_PageUp:   kt = "PgUp"; break
-                case Qt.Key_PageDown: kt = "PgDown"; break
-                case Qt.Key_Escape:   kt = "Esc"; break
-                default:
-                    if (event.text.length === 1 && event.text.charCodeAt(0) < 0x250)
-                        kt = event.text.toUpperCase()
-                    else
-                        return ""
-                }
-                let parts = []
-                if (event.modifiers & Qt.ControlModifier) parts.push("Ctrl")
-                if (event.modifiers & Qt.AltModifier) parts.push("Alt")
-                if (event.modifiers & Qt.ShiftModifier && !/[A-Z0-9]/.test(kt) && kt !== "Space") parts.push("Shift")
-                parts.push(kt)
-                return parts.join("+")
-            }
+            // The action whose binding the recorder bar captures next.
+            // (State now lives on root so the window-level Keys handler can
+            // read it without a focus/scope dependency.)
 
             Column {
                 id: keyCol
@@ -2919,7 +2965,7 @@ ApplicationWindow {
                 SectionLabel { text: qsTr("Gyorsbillentyűk") }
 
                 Text {
-                    visible: keyScroll.recordingAction === ""
+                    visible: root.recordingAction === ""
                     width: parent.width
                     wrapMode: Text.Wrap
                     font.pixelSize: 11
@@ -2927,32 +2973,18 @@ ApplicationWindow {
                     text: qsTr("Kattints egy sorra, majd nyomd meg az új billentyűt. Az átállított billentyűk a ↺ gombbal visszaállíthatók.")
                 }
 
-                // Recorder bar — grabs focus and captures one keypress.
+                // Recorder bar — visual indicator only; the key is captured by
+                // the window-level Keys handler below (focus-independent, so a
+                // stray click/wheel doesn't swallow the recorded key).
                 Rectangle {
                     id: keyRecorder
-                    visible: keyScroll.recordingAction !== ""
+                    visible: root.recordingAction !== ""
                     width: parent.width
                     height: 40
                     radius: 10
                     color: "#18ffffff"
                     border.color: Colors.accent
                     border.width: 1
-                    focus: visible
-
-                    Keys.onPressed: e => {
-                        if (e.key === Qt.Key_Escape) {
-                            keyScroll.stopRecording()
-                            e.accepted = true
-                            return
-                        }
-                        const seq = keyScroll.keyText(e)
-                        if (seq === "") { e.accepted = true; return }
-                        keyMgr.setBinding(keyScroll.recordingAction, seq)
-                        toastHost.show(qsTr("%1: %2")
-                            .arg(keyMgr.labelFor(keyScroll.recordingAction)).arg(seq), "ok")
-                        keyScroll.stopRecording()
-                        e.accepted = true
-                    }
 
                     Row {
                         anchors.centerIn: parent
@@ -3056,9 +3088,9 @@ ApplicationWindow {
                                         Layout.preferredWidth: Math.max(52, kwChipText.implicitWidth + 16)
                                         height: 26
                                         radius: 6
-                                        color: keyScroll.recordingAction === modelData
+                                        color: root.recordingAction === modelData
                                                ? "#26ffffff" : "#22ffffff"
-                                        border.color: keyScroll.recordingAction === modelData
+                                        border.color: root.recordingAction === modelData
                                                ? Colors.accent
                                                : (kwRowMouse.containsMouse ? Colors.borderGlow : Colors.border)
                                         border.width: 1
@@ -3068,7 +3100,7 @@ ApplicationWindow {
                                             text: keyMgr.binding(modelData) || qsTr("—")
                                             font.pixelSize: 11
                                             font.weight: Font.DemiBold
-                                            color: keyScroll.recordingAction === modelData
+                                            color: root.recordingAction === modelData
                                                    ? Colors.accent : Colors.overlayText
                                         }
                                     }
@@ -3079,7 +3111,7 @@ ApplicationWindow {
                                     anchors.fill: parent
                                     hoverEnabled: true
                                     onClicked: {
-                                        keyScroll.recordingAction = modelData
+                                        root.recordingAction = modelData
                                         root.keyRecorderActive = true
                                     }
                                     cursorShape: Qt.PointingHandCursor
@@ -3156,8 +3188,8 @@ ApplicationWindow {
 
         // Cancel any in-flight key recording when the drawer closes or the tab
         // switches — otherwise the global Shortcuts stay disabled.
-        onVisibleChanged: if (!visible) root.keyRecorderActive = false
-        onTabIndexChanged: root.keyRecorderActive = false
+        onVisibleChanged: if (!visible) { root.recordingAction = ""; root.keyRecorderActive = false }
+        onTabIndexChanged: { root.recordingAction = ""; root.keyRecorderActive = false }
 
         // The active scrollview for the current tab, driven by the global
         // wheel handler so the drawer never leaks volume/seek gestures.
