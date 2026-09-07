@@ -19,6 +19,7 @@
 #include "JellyfinClient.h"
 #include "SubtitleClient.h"
 #include "MetadataInfo.h"
+#include "SeekThumbnails.h"
 
 using namespace Qt::Literals::StringLiterals;
 
@@ -127,6 +128,14 @@ int main(int argc, char *argv[])
     auto *core = MpvCore::instance();
     engine.rootContext()->setContextProperty(
         QStringLiteral("playerCore"), core);
+    // Seek previews for the scrubber: ffmpeg sprite sheets. Owned here (not
+    // in QML) so the seek-thumbs image provider below can hand out cropped
+    // tiles — QML's Image sourceClipRect renders black in this Qt version.
+    auto *thumbs = new SeekThumbnails(&app);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("thumbs"), thumbs);
+    engine.addImageProvider(QStringLiteral("seekthumbs"),
+                            new SeekThumbProvider(thumbs));
     // Pause-overlay metadata (Jellyfin items + optional TMDb for local files).
     qmlRegisterType<MetadataInfo>("Omaplayer.Meta", 1, 0, "MetadataInfo");
     QObject::connect(

@@ -2,10 +2,14 @@
 
 #include <QObject>
 #include <QString>
+#include <QImage>
 #include <QRect>
+#include <QMutex>
+#include <QQuickImageProvider>
 #include <QtQmlIntegration>
 
 class QProcess;
+class QSize;
 
 // Seek previews for the timeline: while hovering or scrubbing the scrubber a
 // still of the frame under the pointer floats above the track (replacing the
@@ -51,9 +55,18 @@ public:
     // or nonexistent paths reset the state so the UI falls back to the time
     // bubble.
     Q_INVOKABLE void prepare(const QString &filePath, double duration);
-    // Source rect of the frame at `position` seconds inside the sprite sheet;
-    // QML binds it to the Image's sourceClipRect while scrubbing.
-    Q_INVOKABLE QRect sourceRect(double position) const;
+    // Cache-only warm-up: load a ready sheet at media-open so a cached file
+    // shows an instant preview on hover even while playing. NEVER spawns
+    // ffmpeg — for uncached files it just idles (generation still happens
+    // on demand from the scrubber while paused).
+    Q_INVOKABLE void preload(const QString &filePath, double duration);
+    // Tile index (row-major) for the frame at `position` seconds; QML feeds it
+    // to the seek-thumbs image provider URL.
+    Q_INVOKABLE int tileIndex(double position) const;
+    // Cropped tile for `index` (row-major position in the sprite sheet). The
+    // sheet PNG is loaded lazily on each request — tiles are only fetched when
+    // the scrub position actually changes index.
+    QImage tileImage(int index) const;
     Q_INVOKABLE void clear();
 
 signals:
@@ -71,9 +84,15 @@ private:
     static QString cacheDir();
     static QString cacheStem(const QString &filePath);
 
+    QString spritePath() const;
+
     QProcess *m_proc = nullptr;
+    mutable QMutex m_spriteMutex;
+    mutable QImage m_sprite;
+    mutable QString m_spriteKey;
     QString m_ffmpeg;
     QString m_path;
+    QString m_failedPath;   // last file whose generation failed (per-file latch)
     double m_duration = 0.0;
     QString m_imageUrl;
     int m_count = 0;
@@ -82,4 +101,21 @@ private:
     int m_tileHeight = 1;
     bool m_ready = false;
     bool m_generating = false;
+};
+
+// QML image provider ("image://seekthumbs/<index>") that serves a single
+// cropped tile from the generated sprite sheet. QmlImage's sourceClipRect
+// renders black in this Qt, so the crop moves into C++.
+class SeekThumbProvider : public QQuickImageProvider
+{
+public:
+    explicit SeekThumbProvider(const SeekThumbnails *thumbs)
+        : QQuickImageProvider(QQuickImageProvider::Image), m_thumbs(thumbs)
+    {
+    }
+    QImage requestImage(const QString &id, QSize *size,
+                        const QSize &requestedSize) override;
+
+private:
+    const SeekThumbnails *m_thumbs;
 };

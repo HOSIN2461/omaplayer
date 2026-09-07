@@ -342,7 +342,7 @@ Item {
                                         border.color: activeFocus ? Colors.accent : Colors.border
                                     }
                                     onAccepted: if (passField.text.length === 0) passField.forceActiveFocus()
-                                                else loginBtn.clicked()
+                                                else jellyfin.login(index, userField.text, passField.text)
                                 }
                                 TextField {
                                     id: passField
@@ -360,77 +360,92 @@ Item {
                                         color: "#0b0b0e"
                                         border.color: activeFocus ? Colors.accent : Colors.border
                                     }
-                                    onAccepted: loginBtn.clicked()
+                                    onAccepted: jellyfin.login(index, userField.text, passField.text)
                                 }
+                            }
+
+                            // Primary + secondary buttons in a single row.
+                            Row {
+                                width: parent.width
+                                spacing: 6
+
+                                // Primary: Betöltés / Belépés
                                 Rectangle {
-                                    id: loginBtn
-                                    width: 100
-                                    height: 28
+                                    id: actionBtn
+                                    width: modelData.token.length > 0 ? 90 : 100
+                                    height: 26
                                     radius: 8
-                                    color: loginH.containsMouse ? Colors.accentGlow : Colors.accent
-                                    Text {
+                                    color: actionBtnH.containsMouse ? Colors.accentGlow : Colors.accent
+                                    Row {
                                         anchors.centerIn: parent
-                                        text: qsTr("Belépés")
-                                        font.pixelSize: 11
-                                        font.weight: Font.DemiBold
-                                        color: "#0b0b0e"
+                                        spacing: 6
+                                        Text {
+                                            text: modelData.token.length > 0 ? "\uF04B" : "\uF2F6"
+                                            font.family: "Font Awesome 7 Free Solid"
+                                            font.pixelSize: 10
+                                            color: "#0b0b0e"
+                                        }
+                                        Text {
+                                            text: modelData.token.length > 0 ? qsTr("Betöltés") : qsTr("Belépés")
+                                            font.pixelSize: 11
+                                            font.weight: Font.DemiBold
+                                            color: "#0b0b0e"
+                                        }
                                     }
                                     MouseArea {
-                                        id: loginH
+                                        id: actionBtnH
                                         anchors.fill: parent
                                         hoverEnabled: true
-                                        onClicked: jellyfin.login(index, userField.text, passField.text)
+                                        onClicked: {
+                                            if (modelData.token.length > 0) {
+                                                jellyfin.selectServer(index)
+                                                if (jellyfin.activeServerName.length > 0)
+                                                    showViews()
+                                            } else {
+                                                jellyfin.login(index, userField.text, passField.text)
+                                            }
+                                        }
                                     }
                                 }
-                            }
 
-                            // Logged-in → connect button (re-select a saved token).
-                            Rectangle {
-                                id: connectBtn
-                                width: 90
-                                height: 26
-                                radius: 8
-                                visible: modelData.token.length > 0
-                                color: connectH.containsMouse ? Colors.accentGlow : Colors.accent
-                                Row {
-                                    anchors.centerIn: parent
-                                    spacing: 6
-                                    Text {
-                                        text: "\uF04B"
-                                        font.family: "Font Awesome 7 Free Solid"
-                                        font.pixelSize: 10
-                                        color: "#0b0b0e"
+                                // Secondary: Kijelentkezés / Törlés
+                                Rectangle {
+                                    id: secBtn
+                                    width: modelData.token.length > 0 ? 110 : 70
+                                    height: 26
+                                    radius: 8
+                                    border.color: secBtnH.containsMouse ? Colors.accentGlow : Colors.border
+                                    border.width: 1
+                                    color: secBtnH.containsMouse ? Colors.hover : "transparent"
+                                    Row {
+                                        anchors.centerIn: parent
+                                        spacing: 6
+                                        Text {
+                                            text: modelData.token.length > 0 ? "\uF2F5" : "\uF2ED"
+                                            font.family: "Font Awesome 7 Free Solid"
+                                            font.pixelSize: 10
+                                            color: secBtnH.containsMouse ? Colors.accentGlow : Colors.textDim
+                                        }
+                                        Text {
+                                            text: modelData.token.length > 0 ? qsTr("Kijelentkezés") : qsTr("Törlés")
+                                            font.pixelSize: 10
+                                            font.weight: Font.DemiBold
+                                            color: secBtnH.containsMouse ? Colors.accentGlow : Colors.textDim
+                                        }
                                     }
-                                    Text {
-                                        text: qsTr("Betöltés")
-                                        font.pixelSize: 11
-                                        font.weight: Font.DemiBold
-                                        color: "#0b0b0e"
+                                    MouseArea {
+                                        id: secBtnH
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        onClicked: {
+                                            if (modelData.token.length > 0) {
+                                                jellyfin.logout()
+                                                showServerList()
+                                            } else {
+                                                jellyfin.removeServer(index)
+                                            }
+                                        }
                                     }
-                                }
-                                MouseArea {
-                                    id: connectH
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    onClicked: {
-                                        jellyfin.selectServer(index)
-                                        if (jellyfin.activeServerName.length > 0)
-                                            showViews()
-                                    }
-                                }
-                            }
-
-                            // Remove this server.
-                            Text {
-                                anchors.right: parent.parent.right
-                                anchors.top: parent.parent.top
-                                text: "\uF057"                   // FA circle-xmark
-                                font.family: "Font Awesome 7 Free Solid"
-                                font.pixelSize: 12
-                                color: Colors.textDim
-                                MouseArea {
-                                    anchors.fill: parent
-                                    onClicked: jellyfin.removeServer(index)
                                 }
                             }
                         }

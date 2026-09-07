@@ -41,7 +41,9 @@ ApplicationWindow {
     ControlBar {
         id: bar
         mpv: root.mpv
-        thumbs: thumbs
+        // `thumbs` is a root-context property (C++); passing it via
+        // `thumbs: thumbs` would self-reference the bar's own property and
+        // null it out, so it is intentionally omitted.
 
         z: 2 // above the gesture layer so seek/buttons get the pointer
         anchors.left: parent.left
@@ -64,9 +66,8 @@ ApplicationWindow {
     }
 
     // Seek previews: ffmpeg-generated sprite sheets for the scrubber.
-    SeekThumbnails {
-        id: thumbs
-    }
+    // (Instantiated in C++ so the seek-thumbs image provider can crop its
+    // tiles; exposed to QML as the `thumbs` context property.)
 
     // DLNA cast to LAN renderers (TVs, VLC, Kodi…).
     CastManager {
@@ -132,9 +133,22 @@ ApplicationWindow {
         target: mpv
         function onFilePathChanged() {
             metaTimer.restart()
-            thumbsTimer.restart()
+            thumbsPreload.restart()
         }
-        function onDurationChanged() { thumbsTimer.restart() }
+        function onDurationChanged() {
+            thumbsPreload.restart()
+        }
+    }
+    // Warm the seek-preview cache right after a file loads (cache-hit only,
+    // never ffmpeg), so hovering the timeline during playback shows the
+    // correct frame instantly instead of a bare time bubble until pause.
+    Timer {
+        id: thumbsPreload
+        interval: 700
+        onTriggered: {
+            if (mpv.duration > 0)
+                thumbs.preload(mpv.filePath, mpv.duration)
+        }
     }
     Connections {
         target: jellyfin
@@ -186,14 +200,6 @@ ApplicationWindow {
         id: metaTimer
         interval: 350
         onTriggered: refreshMeta()
-    }
-
-    // Once the media has settled (path + duration both known, debounced),
-    // start preparing the scrubber preview sheet in the background.
-    Timer {
-        id: thumbsTimer
-        interval: 400
-        onTriggered: thumbs.prepare(mpv.filePath, mpv.duration)
     }
 
     // Auto-hide: fade the bar away after idle, keep it while the pointer or a
@@ -1104,6 +1110,7 @@ ApplicationWindow {
         z: 60
 
         property real bodyH: subtitleCol.implicitHeight + 28
+        property real listCap: 320
 
         function close() { visible = false }
 
@@ -1210,7 +1217,7 @@ ApplicationWindow {
             // Search results (scrollable)
             Rectangle {
                 width: parent.width
-                height: Math.min(subResList.contentHeight + 6, subtitlePopup.height - 150)
+                height: Math.min(subResList.contentHeight + 6, subtitlePopup.listCap)
                 visible: subtitleClient.hasApiKey && subtitleClient.results.length > 0
                 color: "transparent"
 
@@ -3051,6 +3058,7 @@ ApplicationWindow {
                                     anchors.leftMargin: 10
                                     anchors.rightMargin: 8
                                     spacing: 8
+                                    z: 4
 
                                     Text {
                                         Layout.fillWidth: true
@@ -3064,21 +3072,27 @@ ApplicationWindow {
 
                                     // Reset-to-default, only for overridden bindings.
                                     Rectangle {
-                                        width: 20; height: 20; radius: 6
-                                        z: 2 // above the row MouseArea, so the click lands here
+                                        id: kwReset
+                                        Layout.preferredWidth: 30
+                                        Layout.preferredHeight: 28
+                                        radius: 8
+                                        z: 3
                                         visible: keyMgr.hasOverride(modelData, keyMgr.revision)
-                                        color: kwReset.containsMouse ? Colors.hover : "transparent"
+                                        color: kwResetMouse.containsMouse ? Colors.hover : "#26ffffff"
+                                        border.color: kwResetMouse.containsMouse ? Colors.accent : Colors.border
+                                        border.width: 1
                                         Text {
                                             anchors.centerIn: parent
                                             text: "\u21BA"
-                                            font.pixelSize: 10
+                                            font.pixelSize: 14
                                             color: Colors.accent
                                         }
                                         MouseArea {
-                                            id: kwReset
+                                            id: kwResetMouse
                                             anchors.fill: parent
                                             hoverEnabled: true
                                             onClicked: {
+                                                root.stopKeyRecording()
                                                 keyMgr.resetBinding(modelData)
                                                 toastHost.show(qsTr("Alapértelmezett visszaállítva"), "ok")
                                             }
@@ -3115,6 +3129,7 @@ ApplicationWindow {
                                     anchors.fill: parent
                                     hoverEnabled: true
                                     onClicked: {
+                                        root.stopKeyRecording()
                                         root.recordingAction = modelData
                                         root.keyRecorderActive = true
                                     }
@@ -3314,6 +3329,7 @@ ApplicationWindow {
         if (jellyfinPanel.visible) { jellyfinPanel.close(); return }
         if (urlDialog.visible) { urlDialog.close(); return }
         if (updatePopup.visible) { updatePopup.close(); return }
+        if (subtitlePopup.visible) { subtitlePopup.close(); return }
         if (root.isFullScreen) { root.isFullScreen = false; mpv.windowFullscreen(false) }
     } }
     Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.volume100; onActivated: {

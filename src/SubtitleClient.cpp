@@ -145,21 +145,52 @@ void SubtitleClient::search(const QString &query)
             const QJsonObject attrs = obj.value("attributes").toObject();
 
             QVariantMap item;
-            item["fileId"]    = obj.value("id").toInt();
             item["lang"]      = attrs.value("language").toString();
             item["langName"]  = attrs.value("language_name").toString();
             item["encoding"]  = attrs.value("encoding").toString();
             item["format"]    = attrs.value("format").toString();
             item["downloads"] = attrs.value("download_count").toInt();
 
-            // Build a readable label: "Hungarian (srt) — 1234 downloads"
-            const QString label = QStringLiteral("%1 (%2) — %3 %4")
-                .arg(attrs.value("release_name").toString().isEmpty()
-                     ? attrs.value("feature_details").toObject().value("title").toString()
-                     : attrs.value("release_name").toString(),
-                     attrs.value("language_name").toString(),
-                     QString::number(attrs.value("download_count").toInt()),
-                     tr("letöltés"));
+            // The download endpoint wants the FILE id, not the subtitle id
+            // (files[0].file_id). A subtitle without any file entry can't be
+            // downloaded, so skip it.
+            const QJsonArray files = attrs.value("files").toArray();
+            if (files.isEmpty())
+                continue;
+            item["fileId"] = files.at(0).toObject().value("file_id").toInt();
+            if (item["fileId"].toInt() <= 0)
+                continue;
+
+            // Build a readable label: "HU · S02E17 release — 1234 letöltés".
+            // Language first (never elided), then the episode tag so the user
+            // can pick the subtitle matching the currently open episode.
+            const QString relName = attrs.value("release_name").toString();
+            const QJsonObject fd = attrs.value("feature_details").toObject();
+            const QString subj = relName.isEmpty()
+                ? fd.value("title").toString()
+                : relName;
+
+            const int season = fd.value("season_number").toInt(-1);
+            const int epNo   = fd.value("episode_number").toInt(-1);
+            QString epTag;
+            if (season >= 0 && epNo >= 0)
+                epTag = QStringLiteral("S%1E%2")
+                            .arg(season, 2, 10, QLatin1Char('0'))
+                            .arg(epNo, 2, 10, QLatin1Char('0'));
+            else if (epNo >= 0)
+                epTag = QStringLiteral("E%1").arg(epNo, 2, 10, QLatin1Char('0'));
+            else if (season >= 0)
+                epTag = QStringLiteral("S%1").arg(season, 2, 10, QLatin1Char('0'));
+
+            const QString dl = QStringLiteral("— %1 %2")
+                .arg(attrs.value("download_count").toInt())
+                .arg(tr("letöltés"));
+            const QString label = epTag.isEmpty()
+                ? QStringLiteral("%1 · %2 %3")
+                      .arg(attrs.value("language").toString().toUpper(), subj, dl)
+                : QStringLiteral("%1 · %2 %3 %4")
+                      .arg(attrs.value("language").toString().toUpper(),
+                           epTag, subj, dl);
             item["label"] = label;
 
             out.append(item);
@@ -180,15 +211,36 @@ void SubtitleClient::searchForCurrentFile(const QString &filePath,
     if (query.isEmpty() && !filePath.isEmpty()) {
         QFileInfo fi(filePath);
         query = fi.completeBaseName();
-        // Strip common release-tag noise (720p, 1080p, x264, etc.) to get a
-        // cleaner search hit.
-        query.remove(QRegularExpression(
-            QStringLiteral("\\b(720p|1080p|2160p|4k|BluRay|BRRip|HDRip|"
-                           "DVDRip|WEBRip|WEB-DL|x264|x265|HEVC|AAC|"
-                           "DTS|FLAC|MP3|5\\.1|7\\.1|REMASTERED|"
-                           "PROPER|EXTENDED|UNRATED|DC|IMAX)\\b"),
-            QRegularExpression::CaseInsensitiveOption));
-        query = query.trimmed();
+    }
+
+    // Strip common release-tag noise (720p, 1080p, x264, etc.) to get a
+    // cleaner search hit — but keep the season/episode marker (S02E17)
+    // so the API returns that specific episode's subtitles.
+    query.remove(QRegularExpression(
+        QStringLiteral("\\b(720p|1080p|2160p|4k|BluRay|BRRip|HDRip|"
+                       "DVDRip|WEBRip|WEB-DL|x264|x265|HEVC|AAC|"
+                       "DTS|FLAC|MP3|5\\.1|7\\.1|REMASTERED|"
+                       "PROPER|EXTENDED|UNRATED|DC|IMAX)\\b"),
+        QRegularExpression::CaseInsensitiveOption));
+    query.replace(QRegularExpression(QStringLiteral("[._\\[\\]()]+")),
+                  QStringLiteral(" "));
+    query = query.simplified();
+
+    // Strip common release-tag noise (720p, 1080p, x264, etc.) to get a
+    // cleaner search hit.
+    query.remove(QRegularExpression(
+        QStringLiteral("\\b(720p|1080p|2160p|4k|BluRay|BRRip|HDRip|"
+                       "DVDRip|WEBRip|WEB-DL|x264|x265|HEVC|AAC|"
+                       "DTS|FLAC|MP3|5\\.1|7\\.1|REMASTERED|"
+                       "PROPER|EXTENDED|UNRATED|DC|IMAX)\\b"),
+        QRegularExpression::CaseInsensitiveOption));
+    query.replace(QRegularExpression(QStringLiteral("[._\\[\\]()]+")),
+                  QStringLiteral(" "));
+    query = query.simplified();
+
+    if (query.isEmpty()) {
+        Q_EMIT errorOccurred(tr("Nincs megadható keresési kifejezés."));
+        return;
     }
     search(query);
 }

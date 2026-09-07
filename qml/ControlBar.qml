@@ -17,14 +17,24 @@ Item {
     id: bar
 
     required property MpvCore mpv
-    required property SeekThumbnails thumbs
+    // NOTE: `thumbs` intentionally has NO local property declaration. It is a
+    // root-context property (set up in C++), and declaring `property
+    // SeekThumbnails thumbs` here would shadow it; the QML binding
+    // `ControlBar { thumbs: thumbs }` would then self-reference → binding loop
+    // → null → every thumbs.* in this file throws and the preview never
+    // renders while the spinner stays visible forever.
 
     // Public show/hide state — Main.qml drives these.
     property bool exposed: true
 
     // Who is hovering anything inside the bar — the public flag Main.qml uses
-    // so the auto-hide timer stays off while the pointer is here.
+    // so the auto-hide timer stays off while the pointer is here. The scrubber
+    // has its own hover-enabled MouseArea that sits above `barArea`, so a
+    // single containsMouse is not enough: keep the bar up while the pointer is
+    // over the timeline (or dragging it) as well.
     readonly property bool anywhereHovered: barArea.containsMouse
+                                            || seek.containsMouse
+                                            || seek.dragging
     readonly property bool dragActive: seek.dragging
 
     // Height follows the window so a small floating window keeps its video
@@ -68,7 +78,7 @@ Item {
         anchors.leftMargin: 16
         anchors.rightMargin: 16
         anchors.topMargin: 8
-        anchors.bottomMargin: 4
+        anchors.bottomMargin: 12
         radius: 18
         // Frosted gradient: a light blue-grey sheen on top melting into the
         // dark body, with video faintly visible through the translucent core.
@@ -275,20 +285,22 @@ Item {
         Row {
             width: parent.width
             height: 22
-            spacing: 8
+            spacing: 2
+            leftPadding: 8
+            rightPadding: 8
 
             Text {
-                width: 52
+                id: txtLeft
                 anchors.verticalCenter: parent.verticalCenter
+                anchors.verticalCenterOffset: 5
                 text: fmtTime(mpv.position)
                 color: Colors.textDim
                 font.pixelSize: 11
-                horizontalAlignment: Text.AlignLeft
             }
 
             Item {
                 id: scrubWrap
-                width: parent.width - 52 - 52 - 16
+                width: parent.width - txtLeft.width - txtRight.width - 20
                 height: parent.height
 
                 property real targetRatio: 0.0
@@ -311,11 +323,18 @@ Item {
                         id: img
                         visible: thumbs.ready
                         anchors.horizontalCenter: parent.horizontalCenter
-                        source: thumbs.imageUrl
-                        sourceClipRect: thumbs.sourceRect(
-                            scrubWrap.targetRatio * mpv.duration)
+                        // Tile served by the seek-thumbs C++ provider: QML's
+                        // sourceClipRect renders black on this Qt, so the
+                        // sprite crop happens in the provider instead. The
+                        // `thumbs.ready` dependency re-resolves the source the
+                        // moment a sheet finishes, so a stationary pointer
+                        // doesn't keep a stale empty tile.
+                        source: thumbs.ready
+                            ? "image://seekthumbs/" + thumbs.tileIndex(
+                                        scrubWrap.targetRatio * mpv.duration)
+                            : ""
                         sourceSize.width: 176
-                        fillMode: Image.Stretch
+                        fillMode: Image.PreserveAspectFit
                         width: 176
                         height: visible ? Math.max(56,
                             Math.round(176 * thumbs.tileHeight / thumbs.tileWidth))
@@ -430,15 +449,30 @@ Item {
                     anchors.fill: parent
                     hoverEnabled: true
 
+                    // Build the preview sheet on demand (first hover/scrub)
+                    // instead of while the movie is loading, so decoding the
+                    // thumbnails never stutters playback startup. A cached
+                    // sheet is instant; for an uncached file the first hover
+                    // starts one background ffmpeg pass (2 threads only) —
+                    // once per file, then cached forever.
+                    function ensureThumbs() {
+                        if (thumbs.enabled && !thumbs.ready && !thumbs.generating
+                                && mpv.duration > 0)
+                            thumbs.prepare(mpv.filePath, mpv.duration)
+                    }
+
+                    onEntered: () => ensureThumbs()
                     onPressed: mouse => {
-                        dragging = true
-                        setFromMouse(mouse.x)
                         // Pause only while dragging so the position preview stays
                         // stable; resume right after the seek if it was playing.
                         pausedForSeek = mpv.playing
                         mpv.pause()
+                        ensureThumbs()
+                        dragging = true
+                        setFromMouse(mouse.x)
                     }
                     onPositionChanged: mouse => {
+                        ensureThumbs()
                         if (dragging)
                             setFromMouse(mouse.x)
                         else
@@ -471,8 +505,9 @@ Item {
             }
 
             Text {
-                width: 52
+                id: txtRight
                 anchors.verticalCenter: parent.verticalCenter
+                anchors.verticalCenterOffset: 5
                 text: fmtTime(mpv.duration)
                 color: Colors.textDim
                 font.pixelSize: 11

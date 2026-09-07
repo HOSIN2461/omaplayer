@@ -2332,8 +2332,11 @@ void MpvCore::loadExternalSubtitle(const QString &path)
 {
     if (!m_handle || path.isEmpty())
         return;
+    // Explicit user action: force this track on, and make sure subtitles are
+    // visible regardless of the current sub-visibility state.
+    mpv_set_property_string(m_handle, "sub-visibility", "yes");
     const QByteArray bytes = path.toUtf8();
-    const char *cmd[] = { "sub-add", bytes.constData(), "auto", nullptr };
+    const char *cmd[] = { "sub-add", bytes.constData(), "select", nullptr };
     mpv_command(m_handle, cmd);
 }
 
