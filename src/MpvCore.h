@@ -51,6 +51,12 @@ class MpvCore : public QObject
     Q_PROPERTY(bool autoSkip READ autoSkip WRITE setAutoSkip NOTIFY autoSkipChanged)
     Q_PROPERTY(bool audioDetection READ audioDetection WRITE setAudioDetection NOTIFY audioDetectionChanged)
 
+    // --- convenience / playback aids ------------------------------------
+    Q_PROPERTY(int sleepRemaining READ sleepRemaining NOTIFY sleepRemainingChanged)
+    Q_PROPERTY(bool normalizeVolume READ normalizeVolume WRITE setNormalizeVolume NOTIFY normalizeVolumeChanged)
+    Q_PROPERTY(bool resumeEnabled READ resumeEnabled WRITE setResumeEnabled NOTIFY resumeEnabledChanged)
+    Q_PROPERTY(QVariantMap mediaInfo READ mediaInfo NOTIFY mediaInfoChanged)
+
     // --- video settings -------------------------------------------------
     Q_PROPERTY(QString videoAspect READ videoAspect WRITE setVideoAspect NOTIFY videoAspectChanged)
     Q_PROPERTY(int videoRotate READ videoRotate WRITE setVideoRotate NOTIFY videoRotateChanged)
@@ -130,6 +136,14 @@ public:
     void setAutoSkip(bool on);
     bool audioDetection() const { return m_audioDetection; }
     void setAudioDetection(bool on);
+
+    int sleepRemaining() const { return m_sleepRemaining; }
+    Q_INVOKABLE void setSleepTimer(int seconds);
+    bool normalizeVolume() const { return m_normalizeVolume; }
+    void setNormalizeVolume(bool on);
+    bool resumeEnabled() const { return m_resumeEnabled; }
+    void setResumeEnabled(bool on);
+    QVariantMap mediaInfo() const { return m_mediaInfo; }
 
     Q_INVOKABLE void open(const QString &location);
     Q_INVOKABLE void openList(const QStringList &files);
@@ -258,8 +272,24 @@ private:
     QString m_audioDetectionFile; // file the running/completed detection serves
     QSet<QString> m_audioScanned;  // local files already probed this session
 
+    // Sleep timer, loudness normalization (ReplayGain), position resume and
+    // on-demand media specs.
+    QTimer *m_sleepTimer = nullptr;
+    int m_sleepRemaining = 0;
+    bool m_normalizeVolume = false;
+    bool m_resumeEnabled = false;
+    QVariantMap m_mediaInfo;
+    QString m_resumeTrackedPath;  // path whose position we're tracking
+    QString m_resumeSeekedPath;   // path already auto-resumed this session
+    qint64 m_lastResumeSaveMs = 0;
+
     void buildAudioEqFilter();
     QTimer *m_eqTimer = nullptr;
+    void applyNormalizeOptions();
+    void saveResumePosition();
+    void seekSavedPosition(const QString &path);
+    void buildMediaInfo();
+    void clearMediaInfo();
     void refreshVideoLabel();
     void setCurrentAudioId(int id);
     void setCurrentSubtitleId(int id);
@@ -306,6 +336,11 @@ signals:
     void skipPromptChanged();
     void autoSkipChanged(bool autoSkip);
     void audioDetectionChanged(bool audioDetection);
+    void sleepRemainingChanged(int remaining);
+    void sleepTimerFired();
+    void normalizeVolumeChanged(bool normalizeVolume);
+    void resumeEnabledChanged(bool resumeEnabled);
+    void mediaInfoChanged();
 
     // --- video/audio/subtitle signals -------------------------------------
     void videoAspectChanged();

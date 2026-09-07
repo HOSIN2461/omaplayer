@@ -60,6 +60,10 @@ public:
     // Enabled providers in search order — the top entry is tried first.
     Q_PROPERTY(QVariantList providerOrder READ providerOrder NOTIFY providersChanged)
     QVariantList providerOrder() const;
+    // All three providers, enabled first then disabled, so the settings list
+    // can keep every row (with its own toggle) visible at once.
+    Q_PROPERTY(QVariantList providerOrderAll READ providerOrderAll NOTIFY providersChanged)
+    QVariantList providerOrderAll() const;
     Q_INVOKABLE void moveProvider(const QString &name, int dir);
 
     // Builds the info map straight from a Jellyfin item normalized by

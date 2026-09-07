@@ -16,6 +16,8 @@
 #include <QMenu>
 #include <QSystemTrayIcon>
 #include <QWindow>
+#include <QSettings>
+#include <QDateTime>
 #include <functional>
 
 #include <cstring>
@@ -133,6 +135,30 @@ mpv_observe_property(m_handle, 0, "pause", MPV_FORMAT_FLAG);
     connect(m_audioMatcher, &AudioIntroMatcher::noMatch,
             this, &MpvCore::onAudioNoMatch);
 
+    // Sleep timer counts down every second and pauses when it expires.
+    m_sleepTimer = new QTimer(this);
+    m_sleepTimer->setInterval(1000);
+    connect(m_sleepTimer, &QTimer::timeout, this, [this] {
+        if (m_sleepRemaining <= 0) {
+            m_sleepTimer->stop();
+            return;
+        }
+        --m_sleepRemaining;
+        Q_EMIT sleepRemainingChanged(m_sleepRemaining);
+        if (m_sleepRemaining == 0) {
+            m_sleepTimer->stop();
+            pause();
+            Q_EMIT sleepTimerFired();
+        }
+    });
+
+    // Loudness normalization + resume-preference are persisted in QSettings
+    // and must reach mpv before the core is initialized.
+    QSettings qs;
+    m_normalizeVolume = qs.value(QStringLiteral("media/normalize"), false).toBool();
+    m_resumeEnabled = qs.value(QStringLiteral("media/resume"), false).toBool();
+    applyNormalizeOptions();
+
     if (mpv_initialize(m_handle) < 0) {
         qWarning("mpv_initialize failed");
     }
@@ -140,6 +166,7 @@ mpv_observe_property(m_handle, 0, "pause", MPV_FORMAT_FLAG);
 
 MpvCore::~MpvCore()
 {
+    saveResumePosition();
     if (m_renderContext)
         mpv_render_context_free(m_renderContext);
     if (m_handle)
@@ -310,20 +337,33 @@ void MpvCore::handleWakeup()
                 if (playing != m_playing) {
                     m_playing = playing;
                     Q_EMIT playingChanged(m_playing);
+                    if (!playing)
+                        saveResumePosition();
                 }
             } else if (prop->format == MPV_FORMAT_DOUBLE && std::strcmp(name, "time-pos") == 0) {
                 if (value != m_position) {
                     m_position = value;
                     Q_EMIT positionChanged(m_position);
                     checkSkipPrompt();
+                    // Throttled periodic resume checkpoint while playing.
+                    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+                    if (m_resumeEnabled && m_playing && m_duration > 60.0
+                        && now - m_lastResumeSaveMs >= 10000) {
+                        saveResumePosition();
+                    }
                 }
             } else if (prop->format == MPV_FORMAT_NODE && std::strcmp(name, "chapter-list") == 0) {
                 recomputeSkipRanges(static_cast<mpv_node *>(prop->data));
             } else if (prop->format == MPV_FORMAT_DOUBLE && std::strcmp(name, "duration") == 0) {
                 if (value != m_duration) {
+                    const bool freshLoad = (m_duration == 0.0) && value > 0.0;
                     m_duration = value;
                     Q_EMIT durationChanged(m_duration);
                     rebuildSkipRanges(); // last chapter's end becomes known
+                    if (freshLoad) {
+                        buildMediaInfo();
+                        seekSavedPosition(m_filePath);
+                    }
                 }
             } else if (prop->format == MPV_FORMAT_DOUBLE && std::strcmp(name, "volume") == 0) {
                 if (value != m_volume) {
@@ -347,7 +387,11 @@ void MpvCore::handleWakeup()
                 if (str) {
                     const QString path = QString::fromUtf8(str);
                     if (path != m_filePath) {
+                        if (!m_filePath.isEmpty())
+                            saveResumePosition();
                         m_filePath = path;
+                        m_resumeTrackedPath = path;
+                        m_resumeSeekedPath.clear();
                         Q_EMIT filePathChanged(m_filePath);
                     }
                 }
@@ -453,12 +497,21 @@ void MpvCore::handleWakeup()
             // next entry whenever a file ends normally and one exists.
             auto *ef = static_cast<mpv_event_end_file *>(event->data);
             if (ef->reason == MPV_END_FILE_REASON_EOF) {
+                // A file watched to the end is "done" — drop its resume slot.
+                if (!m_filePath.isEmpty()) {
+                    QSettings s;
+                    QVariantMap m = s.value(QStringLiteral("media/resumePositions")).toMap();
+                    m.remove(m_filePath);
+                    s.setValue(QStringLiteral("media/resumePositions"), m);
+                }
                 int64_t count = 0;
                 int64_t pos = 0;
                 if (mpv_get_property(m_handle, "playlist-count", MPV_FORMAT_INT64, &count) == 0
                     && mpv_get_property(m_handle, "playlist-pos", MPV_FORMAT_INT64, &pos) == 0
                     && count > 0 && pos >= 0 && pos + 1 < count) {
                     mpv_command_string(m_handle, "playlist-next");
+                } else {
+                    clearMediaInfo();
                 }
             }
             break;
@@ -1837,6 +1890,140 @@ void MpvCore::resetAudioEq()
 void MpvCore::applyAudioEq()
 {
     buildAudioEqFilter();
+}
+
+void MpvCore::setSleepTimer(int seconds)
+{
+    m_sleepRemaining = qMax(0, seconds);
+    if (m_sleepRemaining > 0)
+        m_sleepTimer->start();
+    else
+        m_sleepTimer->stop();
+    Q_EMIT sleepRemainingChanged(m_sleepRemaining);
+}
+
+void MpvCore::applyNormalizeOptions()
+{
+    if (!m_handle)
+        return;
+    if (m_normalizeVolume) {
+        mpv_set_option_string(m_handle, "replaygain", "track");
+        mpv_set_option_string(m_handle, "replaygain-preamp", "6");
+        mpv_set_option_string(m_handle, "volume-max", "150");
+    } else {
+        mpv_set_option_string(m_handle, "replaygain", "off");
+        mpv_set_option_string(m_handle, "volume-max", "100");
+    }
+}
+
+void MpvCore::setNormalizeVolume(bool on)
+{
+    if (on == m_normalizeVolume)
+        return;
+    m_normalizeVolume = on;
+    QSettings().setValue(QStringLiteral("media/normalize"), on);
+    applyNormalizeOptions();
+    Q_EMIT normalizeVolumeChanged(m_normalizeVolume);
+}
+
+void MpvCore::setResumeEnabled(bool on)
+{
+    if (on == m_resumeEnabled)
+        return;
+    m_resumeEnabled = on;
+    QSettings().setValue(QStringLiteral("media/resume"), on);
+    if (!on) {
+        QSettings().remove(QStringLiteral("media/resumePositions"));
+        m_resumeTrackedPath.clear();
+    }
+    Q_EMIT resumeEnabledChanged(m_resumeEnabled);
+}
+
+void MpvCore::saveResumePosition()
+{
+    // Kept only for real media: at least a minute long, mid-file, not a
+    // stream that never reports a duration.
+    const QString path = m_filePath.isEmpty() ? m_resumeTrackedPath : m_filePath;
+    if (!m_resumeEnabled || path.isEmpty() || m_duration <= 60.0
+        || m_position < 15.0 || m_position > m_duration - 30.0) {
+        m_lastResumeSaveMs = 0;
+        return;
+    }
+    QSettings s;
+    QVariantMap m = s.value(QStringLiteral("media/resumePositions")).toMap();
+    const auto prev = m.value(path).toDouble();
+    if (qAbs(prev - m_position) < 5.0)
+        return;
+    m.insert(path, m_position);
+    s.setValue(QStringLiteral("media/resumePositions"), m);
+    m_lastResumeSaveMs = QDateTime::currentMSecsSinceEpoch();
+}
+
+void MpvCore::seekSavedPosition(const QString &path)
+{
+    if (!m_resumeEnabled || path.isEmpty() || path == m_resumeSeekedPath)
+        return;
+    const double pos = QSettings().value(QStringLiteral("media/resumePositions"))
+                                  .toMap().value(path).toDouble();
+    m_resumeSeekedPath = path;
+    if (pos > 10.0 && pos < m_duration - 30.0) {
+        const QByteArray sec = QByteArray::number(pos);
+        const char *seek[] = { "seek", sec.constData(), "absolute", nullptr };
+        mpv_command(m_handle, seek);
+    } else if (pos > 0.0 && pos >= m_duration - 30.0) {
+        // Watched to the very end previously — treat as fresh.
+        QSettings s;
+        QVariantMap m = s.value(QStringLiteral("media/resumePositions")).toMap();
+        m.remove(path);
+        s.setValue(QStringLiteral("media/resumePositions"), m);
+    }
+}
+
+void MpvCore::buildMediaInfo()
+{
+    if (!m_handle) {
+        clearMediaInfo();
+        return;
+    }
+    QVariantMap info;
+    QString fmt;
+    if (mpvNodeStringOut(m_handle, "container-format", &fmt) && !fmt.isEmpty())
+        info["format"] = fmt.toUpper();
+    QString vcodec;
+    if (mpvNodeStringOut(m_handle, "video-codec", &vcodec) && !vcodec.isEmpty())
+        info["videoCodec"] = vcodec;
+    long long w = 0, h = 0;
+    if (mpvNodeInt64(m_handle, "w", &w) && mpvNodeInt64(m_handle, "h", &h) && w > 0 && h > 0)
+        info["resolution"] = QStringLiteral("%1×%2").arg(w).arg(h);
+    double fps = 0.0;
+    if (mpv_get_property(m_handle, "estimated-vf-fps", MPV_FORMAT_DOUBLE, &fps) == 0
+        && fps > 0.0)
+        info["fps"] = fps;
+    QString acodec;
+    if (mpvNodeStringOut(m_handle, "audio-codec", &acodec) && !acodec.isEmpty())
+        info["audioCodec"] = acodec;
+    QString channels;
+    if (mpvNodeStringOut(m_handle, "audio-params/channels", &channels) && !channels.isEmpty())
+        info["audioChannels"] = channels;
+    long long rate = 0;
+    if (mpvNodeInt64(m_handle, "audio-params/samplerate", &rate) && rate > 0)
+        info["sampleRate"] = rate;
+    double vbr = 0.0, abr = 0.0;
+    mpv_get_property(m_handle, "video-bitrate", MPV_FORMAT_DOUBLE, &vbr);
+    mpv_get_property(m_handle, "audio-bitrate", MPV_FORMAT_DOUBLE, &abr);
+    const double total = vbr + abr;
+    if (total > 0.0)
+        info["bitrate"] = total;
+    m_mediaInfo = info;
+    Q_EMIT mediaInfoChanged();
+}
+
+void MpvCore::clearMediaInfo()
+{
+    if (m_mediaInfo.isEmpty())
+        return;
+    m_mediaInfo.clear();
+    Q_EMIT mediaInfoChanged();
 }
 
 void MpvCore::buildAudioEqFilter()

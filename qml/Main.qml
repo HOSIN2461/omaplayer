@@ -67,6 +67,16 @@ ApplicationWindow {
         onOpenSettings: openSettings()
     }
 
+    // Notification toasts, bottom-left above the transport bar (the right
+    // edge hosts the settings drawer / panels).
+    Toast {
+        id: toastHost
+        anchors.left: parent.left
+        anchors.bottom: bar.top
+        anchors.leftMargin: 12
+        anchors.bottomMargin: 10
+    }
+
     // Keep the overlay in sync with whatever is being watched. Jellyfin items
     // come already enriched; local files fall back to the TMDb path.
     function refreshMeta() {
@@ -98,6 +108,24 @@ ApplicationWindow {
                 metaTimer.restart()
         }
         function onProvidersChanged() { metaTimer.restart() }
+    }
+
+    // Surf Jellyfin connection changes as toasts (login / logout / server).
+    Connections {
+        target: jellyfin
+        function onActiveServerNameChanged() {
+            if (jellyfin.activeServerName.length > 0)
+                toastHost.show(qsTr("Csatlakozva: %1").arg(jellyfin.activeServerName), "ok")
+            else
+                toastHost.show(qsTr("Kijelentkezve a Jellyfinből"), "info")
+        }
+    }
+
+    Connections {
+        target: mpv
+        function onSleepTimerFired() {
+            toastHost.show(qsTr("Alvásidőzítő lejárt, szünet"), "ok")
+        }
     }
     Timer {
         id: metaTimer
@@ -999,7 +1027,10 @@ ApplicationWindow {
             qsTr("Hangfájlok (%1)").arg("*.mp3 *.flac *.opus *.ogg *.wav *.aac *.m4a *.ac3"),
             qsTr("Minden fájl (*)")
         ]
-        onAccepted: mpv.loadExternalAudio(selectedFile)
+        onAccepted: {
+            mpv.loadExternalAudio(selectedFile)
+            toastHost.show(qsTr("Külső hang betöltve") + " — " + mpv.mediaTitle, "ok")
+        }
     }
 
     FileDialog {
@@ -1013,6 +1044,7 @@ ApplicationWindow {
         onAccepted: {
             mpv.loadExternalSubtitle(selectedFile)
             settingsMenu.refreshSubTracks()
+            toastHost.show(qsTr("Külső felirat betöltve"), "info")
         }
     }
 
@@ -1022,7 +1054,10 @@ ApplicationWindow {
         title: qsTr("Lejátszási lista mentése")
         fileMode: FileDialog.SaveFile
         nameFilters: [qsTr("M3U lejátszási lista (*.m3u)")]
-        onAccepted: mpv.savePlaylist(selectedFile)
+        onAccepted: {
+            mpv.savePlaylist(selectedFile)
+            toastHost.show(qsTr("Lejátszási lista mentve"), "ok")
+        }
     }
 
     // --- open URL (same frosted-glass design as the context menu) --------------
@@ -1656,6 +1691,29 @@ ApplicationWindow {
                     font.pixelSize: 12
                     width: parent.width
                 }
+                Text {
+                    visible: mpv.mediaInfo && Object.keys(mpv.mediaInfo).length > 0
+                    text: {
+                        const m = mpv.mediaInfo
+                        const b = []
+                        if (m.format) b.push(m.format)
+                        if (m.resolution) b.push(m.resolution)
+                        if (m.fps) b.push(Number(m.fps).toFixed(2) + " fps")
+                        if (m.videoCodec) b.push(m.videoCodec)
+                        if (m.audioCodec) b.push(m.audioCodec)
+                        if (m.audioChannels) b.push(m.audioChannels)
+                        if (m.bitrate) {
+                            const br = Number(m.bitrate)
+                            b.push(br >= 1e6 ? (br / 1e6).toFixed(1) + " Mbps"
+                                             : Math.round(br / 1000) + " kbps")
+                        }
+                        return b.join("   •   ")
+                    }
+                    color: Colors.textDim
+                    font.pixelSize: 10
+                    width: parent.width
+                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                }
 
                 SectionLabel { text: qsTr("Elforgatás") }
                 SegmentRow {
@@ -1774,6 +1832,7 @@ ApplicationWindow {
                     onPick: id => {
                         mpv.setAudioTrack(id)
                         menu.refreshAudioTracks()
+                        toastHost.show(qsTr("Hangsáv váltva"), "info")
                     }
                 }
 
@@ -1972,6 +2031,7 @@ ApplicationWindow {
                     onPick: id => {
                         mpv.setSubtitleTrack(id)
                         menu.refreshSubTracks()
+                        toastHost.show(qsTr("Felirat váltva"), "info")
                     }
                 }
 
@@ -2154,6 +2214,72 @@ ApplicationWindow {
                 ToggleRow { trLabel: qsTr("Audio-hasonlóság érzékelés (fejezet nélküli epizódok)");
                             trValue: mpv.audioDetection;
                             onToggled: v => mpv.audioDetection = v }
+                ToggleRow { trLabel: qsTr("Pozíció megjegyzése (folytatás legközelebb)");
+                            trValue: mpv.resumeEnabled;
+                            onToggled: v => {
+                                mpv.resumeEnabled = v
+                                toastHost.show(qsTr("Pozíció megjegyzése %1")
+                                    .arg(v ? qsTr("bekapcsolva") : qsTr("kikapcsolva")), "info")
+                            } }
+                ToggleRow { trLabel: qsTr("Hangnormalizálás (ReplayGain)"); trValue: mpv.normalizeVolume;
+                            onToggled: v => {
+                                mpv.normalizeVolume = v
+                                toastHost.show(qsTr("Hangnormalizálás %1")
+                                    .arg(v ? qsTr("bekapcsolva") : qsTr("kikapcsolva")), "info")
+                            } }
+
+                SectionLabel { text: qsTr("Alvásidőzítő") }
+                Grid {
+                    width: parent.width
+                    columns: 5
+                    columnSpacing: 6
+                    rowSpacing: 6
+                    Repeater {
+                        model: [ { m: 15, t: "15" }, { m: 30, t: "30" },
+                                 { m: 60, t: "60" }, { m: 90, t: "90" },
+                                 { m: 0, t: qsTr("Ki") } ]
+                        delegate: Rectangle {
+                            required property var modelData
+                            property bool active: menu.sleepSel === modelData.m
+                            readonly property bool engaged: mpv.sleepRemaining > 0
+                            width: (parent.width - 4 * parent.columnSpacing) / 5
+                            height: 26
+                            radius: 13
+                            color: active ? Colors.accent
+                                 : (sleepHover.containsMouse ? Colors.hover : "#26ffffff")
+                            border.color: active ? "transparent" : Colors.border
+                            border.width: 1
+                            Behavior on color { ColorAnimation { duration: 110 } }
+                            Text {
+                                anchors.centerIn: parent
+                                text: modelData.t + (modelData.m > 0 ? "′" : "")
+                                font.pixelSize: 12
+                                color: parent.active ? "#0b0b0e" : Colors.textDim
+                            }
+                            MouseArea {
+                                id: sleepHover
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                onClicked: {
+                                    menu.sleepSel = modelData.m
+                                    mpv.setSleepTimer(modelData.m * 60)
+                                    if (modelData.m > 0)
+                                        toastHost.show(qsTr("Alvásidőzítő: %1 perc").arg(modelData.m), "info")
+                                    else
+                                        toastHost.show(qsTr("Alvásidőzítő kikapcsolva"), "info")
+                                }
+                            }
+                        }
+                    }
+                }
+                Text {
+                    visible: mpv.sleepRemaining > 0
+                    text: qsTr("Hátra: %1:%2").arg(
+                        Math.floor(mpv.sleepRemaining / 60)).arg(
+                        String(mpv.sleepRemaining % 60).padStart(2, "0"))
+                    color: Colors.accent
+                    font.pixelSize: 11
+                }
 
                 SectionLabel { text: qsTr("Metaadat kártya") }
                 ToggleRow { trLabel: qsTr("Info kártya szünetnél"); trValue: meta.overlayEnabled;
@@ -2161,31 +2287,57 @@ ApplicationWindow {
 
                 SectionLabel { text: qsTr("Metaadat források (keresési sorrend)") }
                 Repeater {
-                    model: meta.providerOrder
+                    id: provRepeater
+                    model: meta.providerOrderAll
                     delegate: RowLayout {
                         required property string modelData
                         required property int index
+                        property bool isOn: meta.providers[modelData] === true
+                        id: provRow
                         width: pluginScroll.width - 8
                         height: 26
                         spacing: 8
+                        opacity: isOn ? 1 : 0.55
+                        Behavior on opacity { NumberAnimation { duration: 110 } }
 
                         Text {
                             width: 16
-                            anchors.verticalCenter: parent.verticalCenter
+                            Layout.alignment: Qt.AlignVCenter
                             text: index + 1
-                            color: Colors.accent
+                            color: isOn ? Colors.accent : Colors.textDim
                             font.pixelSize: 11
                             font.weight: Font.DemiBold
                         }
                         Text {
                             Layout.fillWidth: true
-                            anchors.verticalCenter: parent.verticalCenter
+                            Layout.alignment: Qt.AlignVCenter
                             text: ({ tmdb: qsTr("TMDB (API kulcs)"),
                                      tvmaze: qsTr("TVMaze (kulcs nélkül)"),
                                      itunes: qsTr("iTunes (kulcs nélkül)") })[modelData] || modelData
                             color: Colors.overlayText
                             font.pixelSize: 12
                             elide: Text.ElideRight
+                        }
+                        Rectangle {
+                            width: 30
+                            height: 16
+                            radius: 8
+                            color: isOn ? Colors.accent : Colors.track
+                            border.color: isOn ? "transparent" : Colors.border
+                            border.width: 1
+                            Rectangle {
+                                width: 12
+                                height: 12
+                                radius: 6
+                                x: parent.width - 14
+                                y: (parent.height - height) / 2
+                                color: "#ffffff"
+                                Behavior on x { NumberAnimation { duration: 120 } }
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                onClicked: meta.setProviderEnabled(modelData, !provRow.isOn)
+                            }
                         }
                         Rectangle {
                             width: 30
@@ -2210,29 +2362,23 @@ ApplicationWindow {
                             width: 30
                             height: 26
                             radius: 6
-                            opacity: index < meta.providerOrder.length - 1 ? 1 : 0.3
+                            opacity: index < provRepeater.count - 1 ? 1 : 0.3
                             color: downArrow.containsMouse ? Colors.hover : "transparent"
                             Text {
                                 anchors.centerIn: parent
                                 text: "\u25BC"
                                 font.pixelSize: 10
-                                color: index < meta.providerOrder.length - 1 ? Colors.overlayText : Colors.textDim
+                                color: index < provRepeater.count - 1 ? Colors.overlayText : Colors.textDim
                             }
                             MouseArea {
                                 id: downArrow
                                 anchors.fill: parent
-                                enabled: index < meta.providerOrder.length - 1
+                                enabled: index < provRepeater.count - 1
                                 onClicked: meta.moveProvider(modelData, 1)
                             }
                         }
                     }
                 }
-                ToggleRow { trLabel: qsTr("TMDB engedélyezése"); trValue: meta.providers.tmdb === true;
-                            onToggled: v => meta.setProviderEnabled("tmdb", v) }
-                ToggleRow { trLabel: qsTr("TVMaze engedélyezése"); trValue: meta.providers.tvmaze === true;
-                            onToggled: v => meta.setProviderEnabled("tvmaze", v) }
-                ToggleRow { trLabel: qsTr("iTunes engedélyezése"); trValue: meta.providers.itunes === true;
-                            onToggled: v => meta.setProviderEnabled("itunes", v) }
 
                 SectionLabel { text: qsTr("TMDB API kulcs") }
                 RowLayout {
@@ -2282,6 +2428,7 @@ ApplicationWindow {
                         onClicked: {
                             meta.tmdbKey = tmdbKeyField.text
                             tmdbKeyField.focus = false
+                            toastHost.show(qsTr("TMDB kulcs mentve"), "ok")
                         }
                         background: Rectangle {
                             radius: 14
@@ -2318,6 +2465,7 @@ ApplicationWindow {
         property MpvCore coreMpv: root.mpv
         property QtObject metaInfo: meta
         property int tabIndex: 0
+        property int sleepSel: 0
         property var audioTracks: []
         property var subTracks: []
         property var eqFreqs: ["31","62","125","250","500","1k","2k","4k","8k","16k"]

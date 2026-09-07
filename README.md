@@ -17,23 +17,39 @@ magyar felülettel.
   előző/következő gomb-pár kicsúszik). Bal felső sarokban kis **művelet-jelző**
   villan, ami kiírja, mi történt épp (lejátszás/szünet, hangerő, némítás,
   keresés, leállítás, sebesség stb.)
-- **Könyvtár (G) és Beállítások (L) fiókok** — azonos méret, egyszerre
-  csak az egyik lehet nyitva, a vezérlősáv felett jelennek meg; a
-  lejátszási lista **élőben követi a lejátszott elemet** (kiemelés)
+- **Beállítások (G) és Lejátszási lista (L) fiókok** — azonos méret, egyszerre
+  csak az egyik lehet nyitva, a vezérlősáv felett jelennek meg; a lejátszási
+  lista **élőben követi a lejátszott elemet** (kiemelés), egérkerékkel görgethető
 - **Csoportos fájlbetöltés**: natív GTK fájlválasztó multi-selejtekkel
   (`Ctrl+O` megnyitás, „Fájlok hozzáadása a listához" — a lejátszást nem
   szakítja meg)
 - **CLI**: több fájl parancssorból is indítható (`omaplayer a.mp4 b.mp4 …`)
-- **Beállítások (3 fül — a fogaskerék gombbal / `G`)**:
-  - **Videó**: videosáv-információ (felbontás/kodek), képarány (alap, 4:3, 16:9,
-    16:10, 21:9, 5:4), körbevágás (azonos arányok + egyéni), elforgatás
-    (0/90/180/270°), sebesség, hardveres dekódolás, váltott soros szűrő, HDR
-    be/ki, fényerő/kontraszt/telítettség/gamma/színárnyalat csúszkák
+- **Beállítások (4 fül — a fogaskerék gombbal / `G`)**:
+  - **Videó**: videosáv-információ és **média-adatlap** (formátum, felbontás,
+    képfrekvencia, kodekek, hangcsatorna, bitráta), elforgatás (0/90/180/270°),
+    sebesség, hardveres dekódolás, váltott soros szűrő, HDR be/ki,
+    fényerő/kontraszt/telítettség/gamma/színárnyalat csúszkák
   - **Hang**: hangsáv-választó, külső hang file tallózója, hang-késleltetés,
-    szabadon állítható 10-sávos hangszínszabályzó (31 Hz–16 kHz)
+    10-sávos hangszínszabályzó (31 Hz–16 kHz, függőleges sávok) **presetekkel**
+    (Alap, Pop, Rock, Tánc, Klasszikus, Élő)
   - **Felirat**: be/ki, feliratsáv-választó, külső felirat tallózója,
     késleltetés, pozíció, nagyítás, betűméret/betűtípus, szín, keret
     (szín+szélesség) és háttérszín választó
+  - **Kiegészítő**: **alvásidőzítő** (15/30/60/90 perc, lejárta szüneteltet),
+    **pozíció megjegyzése** (a legközelebbi indításkor folytatja a látott
+    ponton), **hangnormalizálás** (ReplayGain), intro/kredit átugrás és
+    audio-hasonlóság érzékelés, **metaadat kártya** be/ki, **metaadat
+    források** — soronkénti ki/be kapcsoló és nyilakkal rendezhető keresési
+    sorrend (TMDB / TVMaze / iTunes), **TMDB API kulcs** lokális fájlokhoz
+- **Szünetkártya**: metaadat-overlay a most játszott tételről — Jellyfin-
+  tartalomhoz a szerver adatai, lokális fájlokhoz opcionális TMDB-keresés —
+  borítóval, értékeléssel, összefoglalóval és forrás-linkkel
+- **Jellyfin médiaszerver**: böngésző-fiók a sáv film-gombjáról (sorozatok,
+  évadok, epizódok), a kiválasztott elem lejátszása, az épp játszott tétel
+  élő jelentése a szervernek, csatlakozás/kijelentkezés értesítéssel jelzi
+- **Értesítések (toast)**: alul balra felbukkanó, színes (info/ok/error)
+  értesítések a fontos eseményekről (hangsáv/felirat váltás, kulcs mentése,
+  Jellyfin csatlakozás, alvásidőzítő lejárta stb.); kattintással eltüntethetők
 - **MPRIS** (D-Bus) — media-kulcsok, GNOME/Wayland média-integráció
 - **Elrejtés a tálcára**: jobb gomb → menüpont (a lejátszás közben a
   StatusNotifier-alapú tálcaikonra kerül; kattintás visszahozza, jobb-gombos

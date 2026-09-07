@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(omaplayer VERSION 0.2.2 LANGUAGES CXX)
+project(omaplayer VERSION 0.2.3 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -42,6 +42,7 @@ qt_add_qml_module(omaplayer
         qml/Colors.qml
         qml/JellyfinPanel.qml
         qml/MetaOverlay.qml
+        qml/Toast.qml
 )
 
 target_include_directories(omaplayer PRIVATE src)

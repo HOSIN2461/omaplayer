@@ -144,6 +144,28 @@ QVariantList MetadataInfo::providerOrder() const
     return l;
 }
 
+QVariantList MetadataInfo::providerOrderAll() const
+{
+    const QString primary = providers().value(QLatin1String("primary")).toString();
+    QStringList order{QLatin1String("tmdb"), QLatin1String("tvmaze"),
+                      QLatin1String("itunes")};
+    order.removeAll(primary);
+    order.prepend(primary);
+    QStringList on, off;
+    for (const QString &p : order) {
+        if (providers().value(p).toBool())
+            on.append(p);
+        else
+            off.append(p);
+    }
+    QVariantList l;
+    for (const QString &p : on)
+        l.append(p);
+    for (const QString &p : off)
+        l.append(p);
+    return l;
+}
+
 void MetadataInfo::moveProvider(const QString &name, int dir)
 {
     QStringList o = orderedProviders();
