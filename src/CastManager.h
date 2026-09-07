@@ -80,12 +80,37 @@ private:
                    bool hasRange);
     QString localIp() const;
 
+    // SSDP: the M-SEARCH replies are read here (unicast back to our socket
+    // and multicast announcements) and their LOCATION headers collected.
+    void handleSsdp();
+    // mDNS resolvers: on top of SSDP we also ask DNS-SD `_mediarender._tcp`
+    // because many TVs only advertise DLNA there and never answer M-SEARCH.
+    void startMdns();
+    void handleMdns();
+    void sendMdnsQuery(int type, const QString &name);
+    void mdnsTryResolve(const QString &instance);
+    QString mdnsLocation(const QString &instance) const;
+    // Feeds a device-description URL into the fetch queue (deduplicated).
+    void appendLocation(const QString &location);
+    // Sends one unicast M-SEARCH and (maloptional) schedules a drain.
+    void flushPending();
+
     QVariantList m_devices;      // [{name, host, port, controlUrl, baseUrl}]
     QStringList m_pending;       // SCDP locations seen in the current burst
     QStringList m_pendingDesc;   // locations still awaiting their description
     QUdpSocket *m_ssdp = nullptr;
+    QUdpSocket *m_mdns = nullptr;
     QTimer *m_discoverTimer = nullptr;
     bool m_discovering = false;
+
+    // mDNS instances collected from `_mediarender._tcp` PTR answers, mapped
+    // to their resolved host/port/description path once SRV/TXT arrive.
+    QStringList m_mdnsInstances;
+    QHash<QString, QVariantMap> m_mdnsInfo;
+    QHash<QString, QString> m_mdnsHosts; // mdns target host -> ip we learned
+    QStringList m_mdnsProbed;            // instances that already got a unicast M-SEARCH
+    QTimer *m_drainTimer = nullptr;      // late-arrival drain after the burst
+    quint16 m_mdnsQueryId = 0;
 
     QTcpServer *m_server = nullptr;
     bool m_serverRunning = false;

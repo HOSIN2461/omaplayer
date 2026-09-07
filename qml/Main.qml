@@ -176,6 +176,12 @@ ApplicationWindow {
         }
     }
 
+    // DLNA cast feedback (errors, started/stopped) as toasts.
+    Connections {
+        target: cast
+        function onNotice(text, kind) { toastHost.show(text, kind) }
+    }
+
     Connections {
         target: mpv
         function onSleepTimerFired() {
@@ -212,7 +218,7 @@ ApplicationWindow {
         onTriggered: {
             if (!bar.anywhereHovered && !bar.dragActive
                     && !settingsMenu.visible && !playlistPanel.visible
-                    && !jellyfinPanel.visible)
+                    && !jellyfinPanel.visible && !castPanel.visible)
                 bar.hide()
         }
     }
@@ -311,6 +317,7 @@ ApplicationWindow {
             if (settingsMenu.visible) { settingsMenu.close(); return }
             if (playlistPanel.visible) { playlistPanel.close(); return }
             if (jellyfinPanel.visible) { jellyfinPanel.close(); return }
+            if (castPanel.visible) { castPanel.close(); return }
             if (contextMenu.visible) { contextMenu.close(); return }
             if (mouse.button === Qt.RightButton)
                 contextMenu.openAt(mouse.x, mouse.y)
@@ -811,110 +818,12 @@ ApplicationWindow {
                     color: Colors.border
                 }
 
-                // Inline DLNA cast — renderer list lives inside the context
-                // menu itself (no popup) for a quick right-click workflow.
-                Text {
-                    text: qsTr("Kivetítés (DLNA)")
-                    color: Colors.accent
-                    font.pixelSize: 12
-                    font.weight: Font.DemiBold
-                    anchors.left: parent.left; anchors.leftMargin: 10
-                    anchors.topMargin: 4; anchors.bottomMargin: 2
-                }
-                Text {
-                    visible: cast.castUrl.length > 0
-                    text: cast.activeDeviceName
-                    color: Colors.accent
-                    font.pixelSize: 11
-                    anchors.left: parent.left; anchors.leftMargin: 10
-                    anchors.bottomMargin: 2
-                }
-                Repeater {
-                    model: cast.devices
-                    delegate: Rectangle {
-                        width: ctxCol.width
-                        height: 28
-                        radius: 6
-                        color: ctxDevMouse.containsMouse
-                               ? (modelData.name === cast.activeDeviceName
-                                  ? Colors.accent : Colors.hover)
-                               : (modelData.name === cast.activeDeviceName
-                                  ? "#26ffffff" : "transparent")
-                        border.color: modelData.name === cast.activeDeviceName
-                                      ? Colors.accent : "transparent"
-                        border.width: 1
-
-                        Row {
-                            anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 10
-                            spacing: 6
-                            // Glow dot next to active renderer
-                            Rectangle {
-                                width: 7; height: 7; radius: width / 2
-                                anchors.verticalCenter: parent.verticalCenter
-                                color: modelData.name === cast.activeDeviceName
-                                       ? Colors.accent : Colors.border
-                            }
-                            Text {
-                                width: parent.width - 12 - actionLabel.implicitWidth
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: modelData.name
-                                color: ctxDevMouse.containsMouse ? "#fff" : Colors.overlayText
-                                font.pixelSize: 12
-                                elide: Text.ElideRight
-                            }
-                            Text {
-                                id: actionLabel
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: modelData.name === cast.activeDeviceName
-                                      ? qsTr("áll") : qsTr("vetít")
-                                color: Colors.accent
-                                font.pixelSize: 10
-                            }
-                        }
-                        MouseArea {
-                            id: ctxDevMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            onClicked: {
-                                if (modelData.name === cast.activeDeviceName) {
-                                    cast.stopCast()
-                                    toastHost.show(qsTr("Kivetítés leállítva"), "info")
-                                } else {
-                                    if (!CastManager.isCastingCapable(mpv.filePath)) {
-                                        toastHost.show(qsTr("Csak helyi fájl kivetíthető"), "err")
-                                        return
-                                    }
-                                    cast.stopCast()
-                                    cast.cast(index, mpv.filePath, mpv.position)
-                                    toastHost.show(qsTr("Kivetítve: %1").arg(modelData.name), "ok")
-                                }
-                                contextMenu.close()
-                            }
-                            cursorShape: Qt.PointingHandCursor
-                        }
-                    }
-                }
-                // Scan / refresh button
-                Rectangle {
-                    width: ctxCol.width
-                    height: 26
-                    radius: 13
-                    color: ctxScanMouse.containsMouse ? Colors.hover : "#18ffffff"
-                    border.color: Colors.border
-                    border.width: 1
-                    Text {
-                        anchors.centerIn: parent
-                        text: cast.discovering ? qsTr("Keres\u00E1s\u2026") : qsTr("Rendererek keres\u00E9se")
-                        color: ctxScanMouse.containsMouse ? Colors.overlayText : Colors.textDim
-                        font.pixelSize: 11
-                    }
-                    MouseArea {
-                        id: ctxScanMouse
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        onClicked: { cast.startDiscovery(); contextMenu.close() }
-                        cursorShape: Qt.PointingHandCursor
-                    }
+                // DLNA cast → left drawer with the LAN renderer list (search
+                // + pick + start/stop there; the tiny inline list is gone).
+                MenuRow {
+                    rowText: qsTr("Kivetítés (DLNA)…")
+                    glyph: "\uF6C4"                  // FA display-arrow-up
+                    onActivate: () => openCast()
                 }
 
                 MenuRow {
@@ -1432,6 +1341,7 @@ ApplicationWindow {
     function openSettings() {
         playlistPanel.visible = false
         jellyfinPanel.visible = false
+        castPanel.close()
         settingsMenu.open()
     }
 
@@ -1439,6 +1349,7 @@ ApplicationWindow {
     function openPlaylist() {
         settingsMenu.visible = false
         jellyfinPanel.visible = false
+        castPanel.close()
         playlistPanel.refresh()
         playlistPanel.selectedIndex = -1
         playlistPanel.open()
@@ -1449,7 +1360,17 @@ ApplicationWindow {
     function openJellyfin() {
         settingsMenu.visible = false
         playlistPanel.visible = false
+        castPanel.close()
         jellyfinPanel.open()
+    }
+
+    // The context menu's "Kivetítés (DLNA)" → open the left renderer drawer
+    // (which kicks off its own discovery). One-drawer rule applies too.
+    function openCast() {
+        settingsMenu.visible = false
+        playlistPanel.visible = false
+        jellyfinPanel.visible = false
+        castPanel.open()
     }
 
     // --- open media ------------------------------------------------------------
@@ -2036,6 +1957,21 @@ ApplicationWindow {
         y: 4
         width: root.drawerWidth
         height: root.height - bar.height - 16
+    }
+
+    // --- DLNA cast drawer (left edge) ------------------------------------
+    // Same drawer rules as the others: one open at a time, Esc / outside click
+    // closes it, and it never takes window focus (G/L/Esc stay alive).
+    CastPanel {
+        id: castPanel
+        z: 50
+        visible: false
+        x: 4
+        y: 4
+        width: root.drawerWidth
+        height: root.height - bar.height - 16
+        manager: cast
+        mpv: root.mpv
     }
 
     // --- settings panel (the bar's gear) -------------------------------
@@ -3327,6 +3263,7 @@ ApplicationWindow {
         if (settingsMenu.visible) { settingsMenu.close(); return }
         if (playlistPanel.visible) { playlistPanel.close(); return }
         if (jellyfinPanel.visible) { jellyfinPanel.close(); return }
+        if (castPanel.visible) { castPanel.close(); return }
         if (urlDialog.visible) { urlDialog.close(); return }
         if (updatePopup.visible) { updatePopup.close(); return }
         if (subtitlePopup.visible) { subtitlePopup.close(); return }

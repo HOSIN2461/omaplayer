@@ -72,22 +72,118 @@ QString didlFor(const QString &title)
 
 } // namespace
 
+namespace {
+
+// --- mDNS wire helpers ----------------------------------------------------
+
+quint16 dnsU16(const QByteArray &pkt, int off)
+{
+    return (quint16(quint8(pkt.at(off))) << 8)
+        | quint16(quint8(pkt.at(off + 1)));
+}
+
+void dnsPutU16(QByteArray &pkt, quint16 v)
+{
+    pkt.append(char(v >> 8));
+    pkt.append(char(v & 0xFF));
+}
+
+// Decodes a (possibly compressed) DNS name; returns the byte offset right
+// after it, or -1 on error. Compression pointers are followed with the
+// proviso that the outer offset is the first pointer's end.
+int dnsDecodeName(const QByteArray &pkt, int off, QString *name)
+{
+    name->clear();
+    QByteArray raw;
+    int pos = off;
+    int outerEnd = -1;
+    for (int guard = 0; guard < 128 && pos < pkt.size(); ++guard) {
+        const quint8 c = quint8(pkt.at(pos));
+        if (c == 0) {
+            if (outerEnd < 0)
+                outerEnd = pos + 1;
+            break;
+        }
+        if ((c & 0xC0) == 0xC0) {
+            if (pos + 1 >= pkt.size())
+                return -1;
+            const int target = ((int(c) & 0x3F) << 8) | quint8(pkt.at(pos + 1));
+            if (outerEnd < 0)
+                outerEnd = pos + 2;
+            pos = target;
+            continue;
+        }
+        if (pos + 1 + c > pkt.size())
+            return -1;
+        if (!raw.isEmpty())
+            raw.append('.');
+        raw.append(pkt.mid(pos + 1, c));
+        pos += 1 + c;
+    }
+    *name = QString::fromLatin1(raw);
+    return outerEnd < 0 ? pos : outerEnd;
+}
+
+QByteArray dnsEncodeName(const QString &name)
+{
+    QByteArray out;
+    const QList<QByteArray> labels = name.toLatin1().split('.');
+    for (const QByteArray &label : labels) {
+        if (label.isEmpty())
+            continue;
+        out.append(char(label.size()));
+        out.append(label);
+    }
+    out.append(char(0));
+    return out;
+}
+
+// The network interface that owns `ip` (used with QUdpSocket multicast fns).
+QNetworkInterface ifaceForIp(const QHostAddress &ip)
+{
+    const QList<QNetworkInterface> ifaces = QNetworkInterface::allInterfaces();
+    for (const QNetworkInterface &iface : ifaces) {
+        if (!(iface.flags() & QNetworkInterface::IsUp)
+            || (iface.flags() & QNetworkInterface::IsLoopBack))
+            continue;
+        const QList<QNetworkAddressEntry> entries = iface.addressEntries();
+        for (const QNetworkAddressEntry &entry : entries) {
+            if (entry.ip() == ip)
+                return iface;
+        }
+    }
+    return QNetworkInterface();
+}
+
+} // namespace
+
 CastManager::CastManager(QObject *parent)
     : QObject(parent)
     , m_ssdp(new QUdpSocket(this))
+    , m_mdns(new QUdpSocket(this))
 {
     m_discoverTimer = new QTimer(this);
     m_discoverTimer->setSingleShot(true);
     m_discoverTimer->setInterval(kDiscoveryMs);
     connect(m_discoverTimer, &QTimer::timeout, this, [this] {
         m_discovering = false;
-        const QStringList pending = m_pending;
-        m_pending.clear();
-        for (const QString &location : pending)
-            fetchDescription(location);
-        if (m_pendingDesc.isEmpty())
-            Q_EMIT devicesChanged();
+        flushPending();
+        // Late mDNS SRV/TXT/A answers may still trickle in after the burst;
+        // drain once more shortly so those reach fetchDescription() too.
+        m_drainTimer->start();
     });
+
+    m_drainTimer = new QTimer(this);
+    m_drainTimer->setSingleShot(true);
+    m_drainTimer->setInterval(1500);
+    connect(m_drainTimer, &QTimer::timeout, this, [this] {
+        flushPending();
+    });
+
+    connect(m_ssdp, &QUdpSocket::readyRead,
+            this, &CastManager::handleSsdp);
+    connect(m_mdns, &QUdpSocket::readyRead,
+            this, &CastManager::handleMdns);
 }
 
 QString CastManager::activeDeviceName() const
@@ -102,9 +198,20 @@ void CastManager::startDiscovery()
 {
     m_devices.clear();
     m_pending.clear();
+    m_pendingDesc.clear();
+    m_mdnsInstances.clear();
+    m_mdnsInfo.clear();
+    m_mdnsHosts.clear();
+    m_mdnsProbed.clear();
     m_discovering = true;
-    if (m_ssdp->state() != QAbstractSocket::BoundState)
+    if (m_ssdp->state() != QAbstractSocket::BoundState) {
         m_ssdp->bind(QHostAddress::AnyIPv4, 0);
+        const QNetworkInterface iface = ifaceForIp(QHostAddress(localIp()));
+        if (iface.isValid())
+            m_ssdp->setMulticastInterface(iface);
+        m_ssdp->joinMulticastGroup(QHostAddress(QStringLiteral("239.255.255.250")));
+        m_ssdp->joinMulticastGroup(QHostAddress(QStringLiteral("239.255.255.251")));
+    }
     Q_EMIT devicesChanged();
 
     const QByteArray msearch =
@@ -120,12 +227,247 @@ void CastManager::startDiscovery()
     m_ssdp->writeDatagram(msearch,
                           QHostAddress(QStringLiteral("239.255.255.251")),
                           kSsdpPort);
+    startMdns();
     m_discoverTimer->start();
 }
 
 void CastManager::stopDiscovery()
 {
     m_discoverTimer->stop();
+    m_drainTimer->stop();
+}
+
+void CastManager::handleSsdp()
+{
+    while (m_ssdp->hasPendingDatagrams()) {
+        QByteArray buf;
+        buf.resize(int(m_ssdp->pendingDatagramSize()));
+        m_ssdp->readDatagram(buf.data(), buf.size());
+        // Parse the HTTP/1.1 reply: extract LOCATION (and, for good measure,
+        // remember ST so rootdevice answers can seed mDNS fallback).
+        QString location, st;
+        const QList<QByteArray> lines = buf.split('\n');
+        for (const QByteArray &line : lines) {
+            const int colon = line.indexOf(':');
+            if (colon <= 0)
+                continue;
+            const QByteArray key = line.left(colon).trimmed().toLower();
+            const QString value = utf8(line.mid(colon + 1).trimmed());
+            if (key == "location" && location.isEmpty())
+                location = value;
+            else if (key == "st" && st.isEmpty())
+                st = value;
+        }
+        if (!location.isEmpty())
+            appendLocation(location);
+    }
+}
+
+void CastManager::startMdns()
+{
+    // Ask DNS-SD for UPnP media renderers. Devices that never answer SSDP
+    // (many TVs) still publish `_mediarender._tcp` via multicast DNS.
+    const auto bindMdns = [this] {
+        // Port 5353 is shared (avahi, browsers...): SO_REUSEADDR/SO_REUSEPORT
+        // lets us receive the multicast answers without stealing the socket.
+        if (!m_mdns->bind(QHostAddress::AnyIPv4, 5353,
+                          QAbstractSocket::ShareAddress
+                              | QAbstractSocket::ReuseAddressHint)) {
+            qWarning() << "cast: mDNS bind failed"
+                       << m_mdns->errorString();
+            return false;
+        }
+        const QNetworkInterface iface = ifaceForIp(QHostAddress(localIp()));
+        if (iface.isValid())
+            m_mdns->setMulticastInterface(iface);
+        const bool joined = m_mdns->joinMulticastGroup(
+            QHostAddress(QStringLiteral("224.0.0.251")));
+        if (!joined)
+            qWarning() << "cast: mDNS join failed" << m_mdns->errorString();
+        return true;
+    };
+    if (m_mdns->state() != QAbstractSocket::BoundState && !bindMdns())
+        return;
+    sendMdnsQuery(12, QStringLiteral("_mediarender._tcp.local"));  // PTR
+    sendMdnsQuery(33, QStringLiteral("_mediarender._tcp.local"));  // SRV
+    sendMdnsQuery(16, QStringLiteral("_mediarender._tcp.local"));  // TXT
+}
+
+void CastManager::sendMdnsQuery(int type, const QString &name)
+{
+    QByteArray pkt;
+    dnsPutU16(pkt, m_mdnsQueryId++);
+    dnsPutU16(pkt, 0x0000);            // standard query (QR=0)
+    dnsPutU16(pkt, 1);                 // QDCOUNT
+    dnsPutU16(pkt, 0);                 // ANCOUNT
+    dnsPutU16(pkt, 0);                 // NSCOUNT
+    dnsPutU16(pkt, 0);                 // ARCOUNT
+    pkt += dnsEncodeName(name);
+    dnsPutU16(pkt, quint16(type));     // PTR/SRV/TXT
+    dnsPutU16(pkt, 0x8001);            // QU bit + IN class: ask for a unicast
+                                       // reply straight back to our socket
+    m_mdns->writeDatagram(pkt,
+                          QHostAddress(QStringLiteral("224.0.0.251")), 5353);
+}
+
+void CastManager::handleMdns()
+{
+    while (m_mdns->hasPendingDatagrams()) {
+        QByteArray buf;
+        buf.resize(int(m_mdns->pendingDatagramSize()));
+        m_mdns->readDatagram(buf.data(), buf.size());
+        if (buf.size() < 12)
+            continue;
+        const quint16 qd = dnsU16(buf, 4);
+        const quint16 an = dnsU16(buf, 6);
+        const int total = int(an) + int(dnsU16(buf, 10)); // answers + additional
+        // Skip the question section.
+        int off = 12;
+        for (int i = 0; i < qd; ++i) {
+            QString ignored;
+            const int next = dnsDecodeName(buf, off, &ignored);
+            if (next < 0)
+                break;
+            off = next + 4; // QTYPE + QCLASS
+        }
+        // Walk answer/additional records (A records for SRV targets often
+        // live in the additional section).
+        for (int i = 0; i < total; ++i) {
+            QString owner;
+            int next = dnsDecodeName(buf, off, &owner);
+            if (next < 0)
+                break;
+            const int rtype = dnsU16(buf, next);
+            const int rclass = dnsU16(buf, next + 2);
+            const int ttl = int(dnsU16(buf, next + 4) << 16)
+                          | int(dnsU16(buf, next + 6));
+            (void)rclass; (void)ttl;
+            const int rdlen = dnsU16(buf, next + 8);
+            int rdata = next + 10;
+            if (rdata + rdlen > buf.size())
+                break;
+            if (rtype == 12 && owner.endsWith("_mediarender._tcp.local")) {
+                // PTR answer: owner=service, rdata=instance name.
+                QString instance;
+                if (dnsDecodeName(buf, rdata, &instance) >= 0
+                    && !m_mdnsInstances.contains(instance)) {
+                    m_mdnsInstances.append(instance);
+                    sendMdnsQuery(33, instance); // SRV
+                    sendMdnsQuery(16, instance); // TXT
+                }
+            } else if (rtype == 33) {
+                // SRV: priority(2) weight(2) port(2) target(name).
+                const int port = dnsU16(buf, rdata + 4);
+                QString target;
+                dnsDecodeName(buf, rdata + 6, &target);
+                QVariantMap info = m_mdnsInfo.value(owner);
+                info[QStringLiteral("port")] = port;
+                info[QStringLiteral("target")] = target;
+                m_mdnsInfo.insert(owner, info);
+                // The SRV target still needs an A/AAAA record to be usable.
+                const QHostAddress addr(target);
+                if (target.isEmpty() || addr.isNull())
+                    sendMdnsQuery(1, target);   // A
+            } else if (rtype == 1 && rdlen == 4) {
+                // A record: host -> ip.
+                const QString ip = QStringLiteral("%1.%2.%3.%4")
+                    .arg(quint8(buf.at(rdata)))
+                    .arg(quint8(buf.at(rdata + 1)))
+                    .arg(quint8(buf.at(rdata + 2)))
+                    .arg(quint8(buf.at(rdata + 3)));
+                m_mdnsHosts.insert(owner, ip);
+            } else if (rtype == 16) {
+                // TXT: path=<...> often carries the device description URL.
+                int p = rdata;
+                const int end = rdata + rdlen;
+                while (p < end) {
+                    const int len = quint8(buf.at(p));
+                    if (p + 1 + len > end)
+                        break;
+                    const QByteArray kv = buf.mid(p + 1, len);
+                    p += 1 + len;
+                    const int eq = kv.indexOf('=');
+                    if (eq > 0 && kv.left(eq).toLower() == "path") {
+                        QVariantMap info = m_mdnsInfo.value(owner);
+                        info[QStringLiteral("path")] = utf8(kv.mid(eq + 1));
+                        m_mdnsInfo.insert(owner, info);
+                    }
+                }
+            }
+            off = rdata + rdlen;
+        }
+        // Resolve any instances whose SRV/TXT just arrived.
+        for (const QString &instance : std::as_const(m_mdnsInstances))
+            mdnsTryResolve(instance);
+    }
+}
+
+void CastManager::mdnsTryResolve(const QString &instance)
+{
+    if (m_mdnsProbed.contains(instance))
+        return;
+    const QVariantMap info = m_mdnsInfo.value(instance);
+    const int port = info.value(QStringLiteral("port")).toInt();
+    const QString target = info.value(QStringLiteral("target")).toString();
+    if (port <= 0 || target.isEmpty())
+        return;
+    const QString ip = m_mdnsHosts.value(target);
+    if (ip.isEmpty())
+        return;
+    m_mdnsProbed.append(instance);
+    const QString path = info.value(QStringLiteral("path")).toString();
+    if (!path.isEmpty()) {
+        QString loc = path;
+        if (!loc.startsWith(QLatin1Char('/')))
+            loc.prepend(QLatin1Char('/'));
+        appendLocation(QStringLiteral("http://%1:%2%3")
+                           .arg(ip).arg(port).arg(loc));
+    } else {
+        // No TXT path: ask the box directly for its description via unicast
+        // SSDP; handleSsdp picks the LOCATION up the same way as multicast.
+        const QByteArray msearch =
+            "M-SEARCH * HTTP/1.1\r\n"
+            "HOST: " + ip.toUtf8() + ":1900\r\n"
+            "MAN: \"ssdp:discover\"\r\n"
+            "MX: 2\r\n"
+            "ST: " + kSearchTarget + "\r\n"
+            "\r\n";
+        m_ssdp->writeDatagram(msearch, QHostAddress(ip), kSsdpPort);
+    }
+}
+
+QString CastManager::mdnsLocation(const QString &instance) const
+{
+    const QVariantMap info = m_mdnsInfo.value(instance);
+    const int port = info.value(QStringLiteral("port")).toInt();
+    const QString target = info.value(QStringLiteral("target")).toString();
+    const QString ip = m_mdnsHosts.value(target);
+    if (port <= 0 || ip.isEmpty())
+        return {};
+    QString path = info.value(QStringLiteral("path")).toString();
+    if (path.isEmpty())
+        path = QStringLiteral("/");
+    if (!path.startsWith(QLatin1Char('/')))
+        path.prepend(QLatin1Char('/'));
+    return QStringLiteral("http://%1:%2%3").arg(ip).arg(port).arg(path);
+}
+
+void CastManager::appendLocation(const QString &location)
+{
+    if (location.isEmpty() || m_pending.contains(location)
+        || m_pendingDesc.contains(location))
+        return;
+    m_pending.append(location);
+}
+
+void CastManager::flushPending()
+{
+    const QStringList pending = m_pending;
+    m_pending.clear();
+    for (const QString &location : pending)
+        fetchDescription(location);
+    if (m_pendingDesc.isEmpty())
+        Q_EMIT devicesChanged();
 }
 
 void CastManager::fetchDescription(const QString &location)
@@ -171,7 +513,18 @@ void CastManager::fetchDescription(const QString &location)
             dev[QStringLiteral("host")] = base.host();
             dev[QStringLiteral("port")] = base.port(80);
             dev[QStringLiteral("controlUrl")] = controlUrl;
-            m_devices.append(dev);
+            // SSDP and mDNS may both report the same renderer; keep one.
+            bool dupe = false;
+            for (const QVariant &existing : m_devices) {
+                if (existing.toMap()
+                        .value(QStringLiteral("controlUrl")).toString()
+                    == controlUrl) {
+                    dupe = true;
+                    break;
+                }
+            }
+            if (!dupe)
+                m_devices.append(dev);
         }
         m_pendingDesc.removeAll(location);
         if (m_pendingDesc.isEmpty())
