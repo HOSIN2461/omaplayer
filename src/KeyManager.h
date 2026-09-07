@@ -60,6 +60,8 @@ public:
     Q_INVOKABLE int sortIndex(const QString &action) const;
     // Hungarian display name for the settings list.
     Q_INVOKABLE QString labelFor(const QString &action) const;
+    // Group id for sectioning the settings list (playback/seek/volume/ui/other).
+    Q_INVOKABLE QString groupFor(const QString &action) const;
 
     Q_INVOKABLE void setBinding(const QString &action, const QString &sequence);
     Q_INVOKABLE void resetBinding(const QString &action);
@@ -96,6 +98,7 @@ private:
     struct Def {
         QString sequence;
         QString label;
+        QString group;          // playback / seek / volume / ui / other
     };
     static const QList<QPair<QString, Def>> &definitions();
     static QString settingKey(const QString &action);

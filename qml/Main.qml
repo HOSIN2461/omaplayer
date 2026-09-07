@@ -1250,6 +1250,10 @@ ApplicationWindow {
     }
 
     property bool isFullScreen: false
+    // True while the keybinding recorder grabs a key; all Shortcut items are
+    // disabled then so the pressed key reaches the recorder instead of firing
+    // the action it would normally trigger.
+    property bool keyRecorderActive: false
     // Both side drawers share one width so they swap size-for-size.
     readonly property real drawerWidth: Math.max(240, Math.min(380, Math.round(root.width * 0.62)))
 
@@ -2000,40 +2004,74 @@ ApplicationWindow {
             }
         }
 
-        // --- tab bar --------------------------------------------------
-        Row {
+        // --- tab bar (segmented control) ---------------------------------
+        // A single track containing all five settings tabs; each segment
+        // clips its label so a narrow drawer never lets tabs bleed into each
+        // other (the long ones elide and show a tooltip on hover instead).
+        Rectangle {
+            id: tabTrack
             width: parent.width
-            spacing: 4
+            height: 30
+            radius: 8
+            color: "#10ffffff"
+            border.color: Colors.border
+            border.width: 1
 
-            Repeater {
-                model: [
-                    qsTr("Videó"),
-                    qsTr("Hang"),
-                    qsTr("Felirat"),
-                    qsTr("Kiegészítő"),
-                    qsTr("Gyorsbillentyűk")
-                ]
-                Rectangle {
-                    required property int index
-                    required property string modelData
-                    height: 26
-                    radius: 6
-                    width: menu.width / 5 - 4
-                    color: (menu.tabIndex === index)
-                           ? Colors.accent : (tabHover.containsMouse ? Colors.hover : "transparent")
-                    Behavior on color { ColorAnimation { duration: 90 } }
-                    Text {
-                        anchors.centerIn: parent
-                        text: modelData
-                        font.pixelSize: 12
-                        font.weight: Font.DemiBold
-                        color: (menu.tabIndex === index) ? "#0b0b0e" : Colors.textDim
-                    }
-                    MouseArea {
-                        id: tabHover
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        onClicked: menu.tabIndex = index
+            Row {
+                id: tabRow
+                anchors.fill: parent
+                anchors.margins: 3
+                spacing: 3
+
+                Repeater {
+                    id: tabRep
+                    model: [
+                        qsTr("Videó"),
+                        qsTr("Hang"),
+                        qsTr("Felirat"),
+                        qsTr("Kiegészítő"),
+                        qsTr("Gyorsbillentyűk")
+                    ]
+                    delegate: Rectangle {
+                        required property int index
+                        required property string modelData
+                        width: (tabTrack.width - 6 - (tabRow.spacing * (tabRep.count - 1))) / tabRep.count
+                        height: 24
+                        radius: 6
+                        clip: true
+                        color: (menu.tabIndex === index)
+                               ? Colors.accent
+                               : (tabHover.containsMouse ? Colors.hover : "transparent")
+                        Behavior on color { ColorAnimation { duration: 90 } }
+
+                        Text {
+                            id: tabLabel
+                            anchors.centerIn: parent
+                            width: parent.width - 6
+                            text: modelData
+                            font.pixelSize: 11
+                            font.weight: Font.DemiBold
+                            elide: Text.ElideRight
+                            horizontalAlignment: Text.AlignHCenter
+                            color: (menu.tabIndex === index) ? "#0b0b0e" : Colors.textDim
+                            Behavior on color { ColorAnimation { duration: 90 } }
+                        }
+                        // Full label appears while hovering a truncated pill.
+                        ToolTip.visible: tabHover.containsMouse && tabLabel.truncated
+                        ToolTip.text: modelData
+                        ToolTip.delay: 500
+
+                        MouseArea {
+                            id: tabHover
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            onClicked: menu.tabIndex = index
+                            onPressed: parent.scale = 0.94
+                            onReleased: parent.scale = 1
+                            onCanceled: parent.scale = 1
+                        }
+                        scale: 1
+                        Behavior on scale { NumberAnimation { duration: 90; easing.type: Easing.OutCubic } }
                     }
                 }
             }
@@ -2829,9 +2867,19 @@ ApplicationWindow {
             contentWidth: keyCol.width
             contentHeight: keyCol.implicitHeight
 
-            // Sets the action whose binding the inline editor row captures.
+            // The action whose binding the recorder bar captures next.
             property string recordingAction: ""
 
+            // Leaving the tab (or any hiding) cancels an in-flight recording
+            // so the global Shortcuts re-enable.
+            onVisibleChanged: if (!visible) stopRecording()
+
+            function stopRecording() {
+                recordingAction = ""
+                root.keyRecorderActive = false
+            }
+
+            // Map a QKeyEvent to the Shortcut-style sequence ("Ctrl+P", "Left"…).
             function keyText(event) {
                 let kt = ""
                 switch (event.key) {
@@ -2869,127 +2917,172 @@ ApplicationWindow {
                 spacing: 8
 
                 SectionLabel { text: qsTr("Gyorsbillentyűk") }
+
                 Text {
-                    text: qsTr("Kattints egy sorra, majd nyomj új billentyűt a hozzárendeléshez. A beállított sorokban a ↺-kattintás visszaállítja az alapértelmezettet.")
+                    visible: keyScroll.recordingAction === ""
                     width: parent.width
                     wrapMode: Text.Wrap
                     font.pixelSize: 11
                     color: Colors.textDim
+                    text: qsTr("Kattints egy sorra, majd nyomd meg az új billentyűt. Az átállított billentyűk a ↺ gombbal visszaállíthatók.")
                 }
 
-                Repeater {
-                    model: keyMgr.actionIds
-                    delegate: Rectangle {
-                        width: keyCol.width
-                        height: 34
-                        radius: 8
-                        color: keyRowMouse.containsMouse ? Colors.hover : "transparent"
-                        border.color: Colors.border
-                        border.width: keyMgr.hasOverride(modelData) ? 1 : 1
-                        opacity: 1
+                // Recorder bar — grabs focus and captures one keypress.
+                Rectangle {
+                    id: keyRecorder
+                    visible: keyScroll.recordingAction !== ""
+                    width: parent.width
+                    height: 40
+                    radius: 10
+                    color: "#18ffffff"
+                    border.color: Colors.accent
+                    border.width: 1
+                    focus: visible
 
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: 10
-                            anchors.rightMargin: 8
-                            spacing: 8
+                    Keys.onPressed: e => {
+                        if (e.key === Qt.Key_Escape) {
+                            keyScroll.stopRecording()
+                            e.accepted = true
+                            return
+                        }
+                        const seq = keyScroll.keyText(e)
+                        if (seq === "") { e.accepted = true; return }
+                        keyMgr.setBinding(keyScroll.recordingAction, seq)
+                        toastHost.show(qsTr("%1: %2")
+                            .arg(keyMgr.labelFor(keyScroll.recordingAction)).arg(seq), "ok")
+                        keyScroll.stopRecording()
+                        e.accepted = true
+                    }
 
-                            Text {
-                                Layout.fillWidth: true
-                                Layout.alignment: Qt.AlignVCenter
-                                text: keyMgr.labelFor(modelData)
-                                color: keyMgr.hasOverride(modelData) ? Colors.accent : Colors.overlayText
-                                font.pixelSize: 12
-                                elide: Text.ElideRight
+                    Row {
+                        anchors.centerIn: parent
+                        spacing: 8
+                        Rectangle {
+                            width: 7; height: 7; radius: width / 2
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: Colors.accent
+                            SequentialAnimation on opacity {
+                                loops: Animation.Infinite
+                                NumberAnimation { to: 0.25; duration: 520 }
+                                NumberAnimation { to: 1; duration: 520 }
                             }
+                        }
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: qsTr("Billentyű felvétele – nyomd meg az új billentyűt (Esc = megszakítás)")
+                            color: Colors.overlayText
+                            font.pixelSize: 12
+                        }
+                    }
+                }
 
-                            // Reset-to-default (only when an override exists)
-                            Rectangle {
-                                width: 22
-                                height: 22
-                                radius: 6
-                                visible: keyMgr.hasOverride(modelData)
-                                color: resetMouse.containsMouse ? Colors.hover : "transparent"
-                                Text {
-                                    anchors.centerIn: parent
-                                    text: "\u21BA"                       // ↺ anticlockwise
-                                    font.pixelSize: 11
-                                    color: Colors.accent
+                // Grouped, sectioned binding rows.
+                Repeater {
+                    id: keyGroups
+                    model: [
+                        { g: "playback", t: qsTr("Lejátszás") },
+                        { g: "seek",     t: qsTr("Navigáció") },
+                        { g: "volume",   t: qsTr("Hangerő") },
+                        { g: "ui",       t: qsTr("Felület") },
+                        { g: "other",    t: qsTr("Egyéb") }
+                    ]
+                    delegate: Column {
+                        width: keyCol.width
+                        spacing: 3
+
+                        Text {
+                            text: modelData.t
+                            font.pixelSize: 10
+                            font.weight: Font.DemiBold
+                            font.letterSpacing: 0.6
+                            color: Colors.accent
+                            topPadding: 8
+                            bottomPadding: 2
+                        }
+
+                        Repeater {
+                            model: keyMgr.actionIds.filter(
+                                a => keyMgr.groupFor(a) === modelData.g)
+                            delegate: Rectangle {
+                                required property string modelData
+                                width: keyCol.width
+                                height: 36
+                                radius: 8
+                                color: kwRowMouse.containsMouse ? Colors.hover : "transparent"
+                                Behavior on color { ColorAnimation { duration: 90 } }
+
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 10
+                                    anchors.rightMargin: 8
+                                    spacing: 8
+
+                                    Text {
+                                        Layout.fillWidth: true
+                                        Layout.alignment: Qt.AlignVCenter
+                                        text: keyMgr.labelFor(modelData)
+                                        font.pixelSize: 12
+                                        color: keyMgr.hasOverride(modelData)
+                                               ? Colors.accent : Colors.overlayText
+                                        elide: Text.ElideRight
+                                    }
+
+                                    // Reset-to-default, only for overridden bindings.
+                                    Rectangle {
+                                        width: 20; height: 20; radius: 6
+                                        visible: keyMgr.hasOverride(modelData)
+                                        color: kwReset.containsMouse ? Colors.hover : "transparent"
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: "\u21BA"
+                                            font.pixelSize: 10
+                                            color: Colors.accent
+                                        }
+                                        MouseArea {
+                                            id: kwReset
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            onClicked: {
+                                                keyMgr.resetBinding(modelData)
+                                                toastHost.show(qsTr("Alapértelmezett visszaállítva"), "ok")
+                                            }
+                                            cursorShape: Qt.PointingHandCursor
+                                        }
+                                    }
+
+                                    // Keycap chip showing the effective binding.
+                                    Rectangle {
+                                        id: kwChip
+                                        Layout.preferredWidth: Math.max(52, kwChipText.implicitWidth + 16)
+                                        height: 26
+                                        radius: 6
+                                        color: keyScroll.recordingAction === modelData
+                                               ? "#26ffffff" : "#22ffffff"
+                                        border.color: keyScroll.recordingAction === modelData
+                                               ? Colors.accent
+                                               : (kwRowMouse.containsMouse ? Colors.borderGlow : Colors.border)
+                                        border.width: 1
+                                        Text {
+                                            id: kwChipText
+                                            anchors.centerIn: parent
+                                            text: keyMgr.binding(modelData) || qsTr("—")
+                                            font.pixelSize: 11
+                                            font.weight: Font.DemiBold
+                                            color: keyScroll.recordingAction === modelData
+                                                   ? Colors.accent : Colors.overlayText
+                                        }
+                                    }
                                 }
+
                                 MouseArea {
-                                    id: resetMouse
+                                    id: kwRowMouse
                                     anchors.fill: parent
                                     hoverEnabled: true
                                     onClicked: {
-                                        keyMgr.resetBinding(modelData)
-                                        toastHost.show(qsTr("Alapértelmezett visszaállítva"), "ok")
+                                        keyScroll.recordingAction = modelData
+                                        root.keyRecorderActive = true
                                     }
                                     cursorShape: Qt.PointingHandCursor
-                                }
-                            }
-
-                            // Editor pill: shows current binding, or captures.
-                            Rectangle {
-                                id: keyPill
-                                width: 84
-                                height: 24
-                                radius: 12
-                                color: keyScroll.recordingAction === modelData
-                                       ? "#26ffffff" : (keyPillMouse.containsMouse ? Colors.hover : "#18ffffff")
-                                border.color: keyScroll.recordingAction === modelData
-                                              ? Colors.accent : Colors.border
-                                border.width: 1
-
-                                Text {
-                                    visible: keyScroll.recordingAction !== modelData
-                                    anchors.centerIn: parent
-                                    text: keyMgr.binding(modelData) || qsTr("—")
-                                    color: keyPillMouse.containsMouse ? Colors.overlayText : Colors.textDim
-                                    font.pixelSize: 11
-                                }
-
-                                // Recording field: focused, captures one key.
-                                TextField {
-                                    visible: keyScroll.recordingAction === modelData
-                                    anchors.fill: parent
-                                    focus: keyScroll.recordingAction === modelData
-                                    placeholderText: qsTr("billentyű…")
-                                    placeholderTextColor: Colors.accent
-                                    font.pixelSize: 11
-                                    color: Colors.overlayText
-                                    verticalAlignment: Text.AlignVCenter
-                                    horizontalAlignment: Text.AlignHCenter
-                                    background: Rectangle {
-                                        color: "transparent"
-                                        radius: 12
-                                    }
-                                    Keys.onPressed: e => {
-                                        if (e.key === Qt.Key_Escape) {
-                                            keyScroll.recordingAction = ""
-                                            e.accepted = true
-                                            return
-                                        }
-                                        const seq = keyScroll.keyText(e)
-                                        if (seq === "") { e.accepted = true; return }
-                                        keyMgr.setBinding(modelData, seq)
-                                        keyScroll.recordingAction = ""
-                                        toastHost.show(qsTr("%1: %2").arg(keyMgr.labelFor(modelData)).arg(seq), "ok")
-                                        e.accepted = true
-                                    }
-                                }
-
-                                MouseArea {
-                                    id: keyPillMouse
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    visible: keyScroll.recordingAction !== modelData
-                                    onClicked: keyScroll.recordingAction = modelData
-                                    cursorShape: Qt.PointingHandCursor
-                                }
-                                MouseArea {
-                                    anchors.fill: parent
-                                    visible: keyScroll.recordingAction === modelData
-                                    onClicked: forceActiveFocus()
                                 }
                             }
                         }
@@ -2999,7 +3092,7 @@ ApplicationWindow {
                 Row {
                     spacing: 8
                     Rectangle {
-                        width: 130
+                        width: 150
                         height: 30
                         radius: 15
                         color: resetAllMouse.containsMouse ? Colors.hover : "#26ffffff"
@@ -3061,6 +3154,11 @@ ApplicationWindow {
         property var subTracks: []
         property var eqFreqs: ["31","62","125","250","500","1k","2k","4k","8k","16k"]
 
+        // Cancel any in-flight key recording when the drawer closes or the tab
+        // switches — otherwise the global Shortcuts stay disabled.
+        onVisibleChanged: if (!visible) root.keyRecorderActive = false
+        onTabIndexChanged: root.keyRecorderActive = false
+
         // The active scrollview for the current tab, driven by the global
         // wheel handler so the drawer never leaks volume/seek gestures.
         property Item activeScroll: settingsContentHost.item
@@ -3108,73 +3206,73 @@ ApplicationWindow {
     }
 
     // --- keyboard ------------------------------------------------------------
-    Shortcut { sequence: keyMgr.playPause; onActivated: {
+    Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.playPause; onActivated: {
         const willPause = mpv.playing
         mpv.togglePause()
         flashAction(willPause ? "\uF04C" : "\uF04B",
                     willPause ? qsTr("Szünet") : qsTr("Lejátszás"))
     } }
-    Shortcut { sequence: keyMgr.seekBackward; onActivated: {
+    Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.seekBackward; onActivated: {
         mpv.seekRelative(-5)
         flashAction("\uF048", "\u22125 mp")
     } }
-    Shortcut { sequence: keyMgr.seekForward; onActivated: {
+    Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.seekForward; onActivated: {
         mpv.seekRelative(5)
         flashAction("\uF051", "+5 mp")
     } }
-    Shortcut { sequence: keyMgr.volumeUp; onActivated: {
+    Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.volumeUp; onActivated: {
         const newVol = Math.min(mpv.volume + 10, 150)
         mpv.setVolume(newVol)
         flashAction(volGlyph(newVol, mpv.muted), newVol + " %")
     } }
-    Shortcut { sequence: keyMgr.volumeDown; onActivated: {
+    Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.volumeDown; onActivated: {
         const newVol = Math.max(mpv.volume - 10, 0)
         mpv.setVolume(newVol)
         flashAction(volGlyph(newVol, mpv.muted), newVol + " %")
     } }
-    Shortcut { sequence: keyMgr.mute; onActivated: {
+    Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.mute; onActivated: {
         const muted = !mpv.muted
         mpv.toggleMute()
         flashAction(volGlyph(mpv.volume, muted), muted ? qsTr("Némítva") : qsTr("Hang"))
     } }
-    Shortcut { sequence: keyMgr.fullscreen; onActivated: root.toggleFullscreen() }
-    Shortcut { sequence: keyMgr.minimize; onActivated: mpv.toggleMinimize() }
-    Shortcut { sequence: keyMgr.settings; onActivated: {
+    Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.fullscreen; onActivated: root.toggleFullscreen() }
+    Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.minimize; onActivated: mpv.toggleMinimize() }
+    Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.settings; onActivated: {
         if (settingsMenu.visible) { settingsMenu.close(); return }
         openSettings()
     } }
-    Shortcut { sequence: keyMgr.playlist; onActivated: {
+    Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.playlist; onActivated: {
         if (playlistPanel.visible) { playlistPanel.close(); return }
         openPlaylist()
     } }
-    Shortcut { sequence: keyMgr.jellyfin; onActivated: {
+    Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.jellyfin; onActivated: {
         if (jellyfinPanel.visible) { jellyfinPanel.close(); return }
         openJellyfin()
     } }
     // Playback speed (mpv default bindings: halve / double).
-    Shortcut { sequence: keyMgr.speedHalve; onActivated: {
+    Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.speedHalve; onActivated: {
         mpv.speed = Math.max(0.25, mpv.speed / 2)
         flashAction("\uF0E7", mpv.speed.toFixed(2) + "\u00D7")
     } }
-    Shortcut { sequence: keyMgr.speedDouble; onActivated: {
+    Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.speedDouble; onActivated: {
         mpv.speed = Math.min(4, mpv.speed * 2)
         flashAction("\uF0E7", mpv.speed.toFixed(2) + "\u00D7")
     } }
     // Playlist navigation (mpv): [n]ext / [p]revious.
-    Shortcut { sequence: keyMgr.nextItem; onActivated: {
+    Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.nextItem; onActivated: {
         mpv.playlistNext()
         flashAction("\uF051", qsTr("Következő"))
     } }
-    Shortcut { sequence: keyMgr.prevItem; onActivated: {
+    Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.prevItem; onActivated: {
         mpv.playlistPrevious()
         flashAction("\uF048", qsTr("Előző"))
     } }
-    Shortcut { sequence: keyMgr.removeSelected; onActivated: playlistPanel.removeSelected() }
-    Shortcut { sequence: keyMgr.toggleSearch; onActivated: searchToggle.clicked() }
-    Shortcut { sequence: keyMgr.openFile; onActivated: openDialog.open() }
-    Shortcut { sequence: keyMgr.screenshot; onActivated: mpv.takeScreenshot() }
-    Shortcut { sequence: keyMgr.stats; onActivated: statsOverlay.open = !statsOverlay.open }
-    Shortcut { sequence: keyMgr.escape; onActivated: {
+    Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.removeSelected; onActivated: playlistPanel.removeSelected() }
+    Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.toggleSearch; onActivated: searchToggle.clicked() }
+    Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.openFile; onActivated: openDialog.open() }
+    Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.screenshot; onActivated: mpv.takeScreenshot() }
+    Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.stats; onActivated: statsOverlay.open = !statsOverlay.open }
+    Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.escape; onActivated: {
         if (settingsMenu.visible) { settingsMenu.close(); return }
         if (playlistPanel.visible) { playlistPanel.close(); return }
         if (jellyfinPanel.visible) { jellyfinPanel.close(); return }
@@ -3182,7 +3280,7 @@ ApplicationWindow {
         if (updatePopup.visible) { updatePopup.close(); return }
         if (root.isFullScreen) { root.isFullScreen = false; mpv.windowFullscreen(false) }
     } }
-    Shortcut { sequence: keyMgr.volume100; onActivated: {
+    Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.volume100; onActivated: {
         mpv.setVolume(100)
         flashAction(volGlyph(100, mpv.muted), "100 %")
     } }

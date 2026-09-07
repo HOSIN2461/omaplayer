@@ -6,30 +6,30 @@ using namespace Qt::Literals::StringLiterals;
 
 const QList<QPair<QString, KeyManager::Def>> &KeyManager::definitions()
 {
-    // (action, { default sequence, Hungarian label }). Order = menu order.
+    // (action, { default sequence, Hungarian label, group }). Order = menu order.
     static const QList<QPair<QString, KeyManager::Def>> table = {
-        { "playPause",     { "Space",    "Lejátszás / szünet" } },
-        { "seekBackward",  { "Left",     "Visszalépés 5 mp" } },
-        { "seekForward",   { "Right",    "Előrelépés 5 mp" } },
-        { "volumeUp",      { "Up",       "Hangerő növelés" } },
-        { "volumeDown",    { "Down",     "Hangerő csökkentés" } },
-        { "mute",          { "M",        "Némítás" } },
-        { "fullscreen",    { "F",        "Teljes képernyő" } },
-        { "minimize",      { "I",        "Kis méret" } },
-        { "settings",      { "G",        "Beállítások" } },
-        { "playlist",      { "L",        "Lejátszási lista" } },
-        { "jellyfin",      { "J",        "Jellyfin" } },
-        { "speedHalve",    { "[",        "Sebesség felezés" } },
-        { "speedDouble",   { "]",        "Sebesség duplázás" } },
-        { "nextItem",      { "N",        "Következő média" } },
-        { "prevItem",      { "P",        "Előző média" } },
-        { "removeSelected",{ "Delete",   "Kiválasztott törlése" } },
-        { "toggleSearch",  { "Ctrl+F",   "Keresés" } },
-        { "openFile",      { "Ctrl+O",   "Média megnyitása" } },
-        { "screenshot",    { "Ctrl+S",   "Képernyőkép" } },
-        { "stats",         { "Ctrl+I",   "Lejátszási statisztika" } },
-        { "volume100",     { "Ctrl+0",   "Hangerő 100%" } },
-        { "escape",        { "Esc",      "Bezár / kivonás" } },
+        { "playPause",     { "Space",    "Lejátszás / szünet", "playback" } },
+        { "nextItem",      { "N",        "Következő média", "playback" } },
+        { "prevItem",      { "P",        "Előző média", "playback" } },
+        { "speedHalve",    { "[",        "Sebesség felezés", "playback" } },
+        { "speedDouble",   { "]",        "Sebesség duplázás", "playback" } },
+        { "seekBackward",  { "Left",     "Visszalépés 5 mp", "seek" } },
+        { "seekForward",   { "Right",    "Előrelépés 5 mp", "seek" } },
+        { "volumeUp",      { "Up",       "Hangerő növelés", "volume" } },
+        { "volumeDown",    { "Down",     "Hangerő csökkentés", "volume" } },
+        { "mute",          { "M",        "Némítás", "volume" } },
+        { "volume100",     { "Ctrl+0",   "Hangerő 100%", "volume" } },
+        { "fullscreen",    { "F",        "Teljes képernyő", "ui" } },
+        { "minimize",      { "I",        "Kis méret", "ui" } },
+        { "toggleSearch",  { "Ctrl+F",   "Keresés", "ui" } },
+        { "stats",         { "Ctrl+I",   "Lejátszási statisztika", "ui" } },
+        { "settings",      { "G",        "Beállítások", "other" } },
+        { "playlist",      { "L",        "Lejátszási lista", "other" } },
+        { "jellyfin",      { "J",        "Jellyfin", "other" } },
+        { "openFile",      { "Ctrl+O",   "Média megnyitása", "other" } },
+        { "screenshot",    { "Ctrl+S",   "Képernyőkép", "other" } },
+        { "removeSelected",{ "Delete",   "Kiválasztott törlése", "other" } },
+        { "escape",        { "Esc",      "Bezár / kivonás", "other" } },
     };
     return table;
 }
@@ -97,6 +97,15 @@ QString KeyManager::labelFor(const QString &action) const
             return d.label;
     }
     return action;
+}
+
+QString KeyManager::groupFor(const QString &action) const
+{
+    for (const auto &[a, d] : definitions()) {
+        if (a == action)
+            return d.group;
+    }
+    return QStringLiteral("other");
 }
 
 QString KeyManager::binding(const QString &action) const
