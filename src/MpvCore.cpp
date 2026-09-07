@@ -18,6 +18,7 @@
 #include <QWindow>
 #include <QSettings>
 #include <QDateTime>
+#include <QDir>
 #include <functional>
 
 #include <cstring>
@@ -1327,9 +1328,52 @@ bool MpvCore::isFullscreen()
 
 void MpvCore::takeScreenshot()
 {
+    // The capture itself happens Qt-side (grabToImage) — mpv's own
+    // screenshot-to-file can't download the hardware-decoded frame in this
+    // NVIDIA + GL-render env ("Taking screenshot failed"). See the QML
+    // handler for the actual grab.
+    Q_EMIT screenshotRequested();
+}
+
+bool MpvCore::mediaReady() const
+{
     if (!m_handle)
+        return false;
+    double d = 0.0;
+    if (mpv_get_property(m_handle, "duration", MPV_FORMAT_DOUBLE, &d) == 0 && d > 0.0)
+        return true;
+    int64_t n = 0;
+    return mpv_get_property(m_handle, "playlist-count", MPV_FORMAT_INT64, &n) == 0 && n > 0;
+}
+
+void MpvCore::saveScreenshotImage(const QImage &img)
+{
+    if (img.isNull()) {
+        Q_EMIT screenshotSaved(QString());
         return;
-    mpv_command_string(m_handle, "screenshot-to-file ~/Pictures/omaplayer-${file-name}");
+    }
+    QDir dir(QDir::homePath() + QStringLiteral("/Pictures"));
+    dir.mkpath(QStringLiteral("."));
+    // If the observed "path" hasn't arrived yet (first load lag), ask mpv
+    // directly so the filename still reflects the current source.
+    QString current = m_filePath;
+    if (current.isEmpty() && m_handle) {
+        char *raw = nullptr;
+        if (mpv_get_property(m_handle, "path", MPV_FORMAT_STRING, &raw) >= 0 && raw) {
+            current = QString::fromUtf8(raw);
+            mpv_free(raw);
+        }
+    }
+    QString base = QFileInfo(current).completeBaseName();
+    if (base.isEmpty())
+        base = QStringLiteral("media");
+    const QString dest = dir.filePath(QStringLiteral("omaplayer-%1-%2.png")
+        .arg(QDateTime::currentDateTime().toString(QLatin1String("yyyy-MM-dd_HH-mm-ss")))
+        .arg(base));
+    if (!img.save(dest, "PNG"))
+        Q_EMIT screenshotSaved(QString());
+    else
+        Q_EMIT screenshotSaved(dest);
 }
 
 void MpvCore::openList(const QStringList &files)

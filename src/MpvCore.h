@@ -7,6 +7,7 @@
 #include <QSet>
 #include <QTimer>
 #include <QVector>
+#include <QImage>
 #include <QtQmlIntegration>
 #include <functional>
 
@@ -174,6 +175,13 @@ public:
     Q_INVOKABLE void hideToTray();
     Q_INVOKABLE void windowFullscreen(bool on);
     Q_INVOKABLE void takeScreenshot();
+    // True when a real media file is loaded. Asks mpv directly instead of the
+    // observed "duration" property, which can lag on first load.
+    Q_INVOKABLE bool mediaReady() const;
+    // Receiver for the Qt-side grabToImage result (rendered video frame incl.
+    // mpv subtitles), which works regardless of the hwdec/GL interop that the
+    // mpv-native screenshot fails on with NVIDIA.
+    Q_INVOKABLE void saveScreenshotImage(const QImage &img);
     Q_INVOKABLE void toggleSubtitles();
     Q_INVOKABLE void skipCurrent();
     Q_INVOKABLE void dismissSkipPrompt();
@@ -337,6 +345,8 @@ signals:
     void autoSkipChanged(bool autoSkip);
     void audioDetectionChanged(bool audioDetection);
     void sleepRemainingChanged(int remaining);
+    void screenshotRequested();
+    void screenshotSaved(const QString &path);
     void sleepTimerFired();
     void normalizeVolumeChanged(bool normalizeVolume);
     void resumeEnabledChanged(bool resumeEnabled);

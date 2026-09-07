@@ -59,6 +59,22 @@ ApplicationWindow {
         id: meta
     }
 
+    // Screenshots: mpv cannot download the hardware-decoded frame in this
+    // NVIDIA + GL render env, so the Qt renderer grabs the video item's own
+    // framebuffer (which already includes mpv-drawn subtitles).
+    function grabAndSaveScreenshot() {
+        if (!mpv.mediaReady()) {
+            toastHost.show(qsTr("Nincs mit lefényképezni"), "err")
+            return
+        }
+        video.grabToImage(res => {
+            if (!res || res.image.width === 0) {
+                toastHost.show(qsTr("Képernyőkép nem sikerült"), "err")
+                return
+            }
+            mpv.saveScreenshotImage(res.image)
+        })
+    }
     MetaOverlay {
         id: metaOverlay
         anchors.fill: parent
@@ -125,6 +141,20 @@ ApplicationWindow {
         target: mpv
         function onSleepTimerFired() {
             toastHost.show(qsTr("Alvásidőzítő lejárt, szünet"), "ok")
+        }
+    }
+    Connections {
+        target: mpv
+        function onScreenshotSaved(path) {
+            toastHost.show(path.length > 0
+                ? qsTr("Képernyőkép mentve: %1").arg(path)
+                : qsTr("Képernyőkép nem sikerült"), path.length > 0 ? "ok" : "err")
+        }
+    }
+    Connections {
+        target: mpv
+        function onScreenshotRequested() {
+            grabAndSaveScreenshot()
         }
     }
     Timer {
