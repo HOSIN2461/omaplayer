@@ -21,6 +21,9 @@ class KeyManager : public QObject
 
     Q_PROPERTY(QStringList actionIds READ actionIds CONSTANT)
     Q_PROPERTY(bool modified READ modified NOTIFY bindingsChanged)
+    // Bumped on every mutation so list/chip bindings that query hasOverride()
+    // or binding() re-evaluate even though those are plain invokables.
+    Q_PROPERTY(int revision READ revision NOTIFY bindingsChanged)
     Q_PROPERTY(QString playPause READ key_playPause NOTIFY bindingsChanged)
     Q_PROPERTY(QString seekBackward READ key_seekBackward NOTIFY bindingsChanged)
     Q_PROPERTY(QString seekForward READ key_seekForward NOTIFY bindingsChanged)
@@ -52,9 +55,11 @@ public:
 
     // The effective sequence for `action` — the user override if one exists,
     // otherwise the built-in default. Empty when unknown.
-    Q_INVOKABLE QString binding(const QString &action) const;
+    // The `revision` parameter is a dependency hint for QML bindings: passing
+    // keyMgr.revision re-evaluates the call whenever bindings change.
+    Q_INVOKABLE QString binding(const QString &action, int revision = 0) const;
     // True if the user stored an override for `action`.
-    Q_INVOKABLE bool hasOverride(const QString &action) const;
+    Q_INVOKABLE bool hasOverride(const QString &action, int revision = 0) const;
     Q_INVOKABLE QString defaultFor(const QString &action) const;
     // Position in the settings list (stable ordering).
     Q_INVOKABLE int sortIndex(const QString &action) const;
@@ -90,6 +95,8 @@ public:
     QString key_volume100() const { return binding("volume100"); }
     QString key_escape() const { return binding("escape"); }
 
+    int revision() const { return m_revision; }
+
 signals:
     void bindingsChanged();
 
@@ -104,4 +111,5 @@ private:
     static QString settingKey(const QString &action);
 
     QStringList m_actions;      // order from the definitions table
+    int m_revision = 0;         // bumps on every binding mutation
 };

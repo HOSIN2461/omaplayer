@@ -1249,6 +1249,48 @@ void MpvCore::toggleMinimize()
         m_renderWindow->setVisibility(QWindow::Minimized);
 }
 
+void MpvCore::toggleMiniMode()
+{
+    if (!m_renderWindow || m_miniTransitioning)
+        return;
+    m_miniTransitioning = true;
+    if (m_miniMode) {
+        applyWmResizeTo(640, 400);
+        m_miniMode = false;
+    } else {
+        // Qt-side best effort (harmless where the compositor honours it).
+        m_renderWindow->resize(320, 200);
+        applyWmResizeTo(320, 200);
+        m_miniMode = true;
+    }
+}
+
+// Hyprland's Lua config only accepts *relative* window resizes, so we read the
+// focused window's real size from `hyprctl -j activewindow` and dispatch the
+// delta that lands on `targetW` x `targetH`. On non-Hyprland setups the
+// process fails and the plain QWindow::resize() above is the effective path.
+void MpvCore::applyWmResizeTo(int targetW, int targetH)
+{
+    auto *p = new QProcess;
+    p->setProcessChannelMode(QProcess::MergedChannels);
+    QObject::connect(p, &QProcess::finished, this, [this, p, targetW, targetH] {
+        const QJsonObject o = QJsonDocument::fromJson(p->readAll()).object();
+        p->deleteLater();
+        if (o.value(QStringLiteral("class")).toString() != QLatin1String("omaplayer"))
+            return; // focus drifted to another window: never resize that one
+        const auto size = o.value(QStringLiteral("size")).toArray();
+        const int curW = size.isEmpty() ? 0 : size.at(0).toInt();
+        const int curH = size.size() < 2 ? 0 : size.at(1).toInt();
+        if (curW > 0 && curH > 0 && (curW != targetW || curH != targetH))
+            dispatchHypr({ "dispatch",
+                           QStringLiteral("hl.dsp.window.resize({ x = %1, y = %2, relative = true })")
+                               .arg(targetW - curW)
+                               .arg(targetH - curH) });
+        m_miniTransitioning = false;
+    });
+    p->start("hyprctl", { "-j", "activewindow" });
+}
+
 void MpvCore::setupTray()
 {
     if (m_tray)

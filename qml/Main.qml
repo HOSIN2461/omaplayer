@@ -14,7 +14,10 @@ ApplicationWindow {
     minimumWidth: 320
     minimumHeight: 200
     color: "black"
-    property MpvCore mpv: MpvCore {}
+    // The single playback engine instance (exposed from main.cpp as the
+    // `playerCore` context property — NOT a fresh `MpvCore {}`, so the video
+    // item, control bar, shortcuts and stats overlay all share one object).
+    property MpvCore mpv: playerCore
     property bool autoPip: Qt.application.arguments.indexOf("--pip") >= 0
     // The player is a compact floating window by design (float + pin via the
     // Hyprland rule); the much bigger "windowed" mode below would feel like a
@@ -95,9 +98,9 @@ ApplicationWindow {
     }
 
     // Live playback statistics overlay (Ctrl+I) — polls mpv while visible.
+    // Own positioning (top-right, not anchored/filled).
     StatsOverlay {
         id: statsOverlay
-        anchors.fill: parent
         mpv: root.mpv
     }
 
@@ -3054,7 +3057,7 @@ ApplicationWindow {
                                         Layout.alignment: Qt.AlignVCenter
                                         text: keyMgr.labelFor(modelData)
                                         font.pixelSize: 12
-                                        color: keyMgr.hasOverride(modelData)
+                                        color: keyMgr.hasOverride(modelData, keyMgr.revision)
                                                ? Colors.accent : Colors.overlayText
                                         elide: Text.ElideRight
                                     }
@@ -3062,7 +3065,8 @@ ApplicationWindow {
                                     // Reset-to-default, only for overridden bindings.
                                     Rectangle {
                                         width: 20; height: 20; radius: 6
-                                        visible: keyMgr.hasOverride(modelData)
+                                        z: 2 // above the row MouseArea, so the click lands here
+                                        visible: keyMgr.hasOverride(modelData, keyMgr.revision)
                                         color: kwReset.containsMouse ? Colors.hover : "transparent"
                                         Text {
                                             anchors.centerIn: parent
@@ -3097,7 +3101,7 @@ ApplicationWindow {
                                         Text {
                                             id: kwChipText
                                             anchors.centerIn: parent
-                                            text: keyMgr.binding(modelData) || qsTr("—")
+                                            text: keyMgr.binding(modelData, keyMgr.revision) || qsTr("—")
                                             font.pixelSize: 11
                                             font.weight: Font.DemiBold
                                             color: root.recordingAction === modelData
@@ -3268,7 +3272,7 @@ ApplicationWindow {
         flashAction(volGlyph(mpv.volume, muted), muted ? qsTr("Némítva") : qsTr("Hang"))
     } }
     Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.fullscreen; onActivated: root.toggleFullscreen() }
-    Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.minimize; onActivated: mpv.toggleMinimize() }
+    Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.minimize; onActivated: mpv.toggleMiniMode() }
     Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.settings; onActivated: {
         if (settingsMenu.visible) { settingsMenu.close(); return }
         openSettings()

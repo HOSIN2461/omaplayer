@@ -65,7 +65,7 @@ QString KeyManager::settingKey(const QString &action)
     return action;
 }
 
-bool KeyManager::hasOverride(const QString &action) const
+bool KeyManager::hasOverride(const QString &action, int) const
 {
     QSettings s;
     s.beginGroup(kGroup);
@@ -108,7 +108,7 @@ QString KeyManager::groupFor(const QString &action) const
     return QStringLiteral("other");
 }
 
-QString KeyManager::binding(const QString &action) const
+QString KeyManager::binding(const QString &action, int) const
 {
     if (action.isEmpty())
         return QString();
@@ -126,6 +126,7 @@ void KeyManager::setBinding(const QString &action, const QString &sequence)
     QSettings s;
     s.beginGroup(kGroup);
     s.setValue(settingKey(action), trimmed);
+    ++m_revision;
     Q_EMIT bindingsChanged();
 }
 
@@ -135,6 +136,7 @@ void KeyManager::resetBinding(const QString &action)
     s.beginGroup(kGroup);
     if (s.contains(settingKey(action))) {
         s.remove(settingKey(action));
+        ++m_revision;
         Q_EMIT bindingsChanged();
     }
 }
@@ -144,5 +146,6 @@ void KeyManager::resetAll()
     QSettings s;
     s.beginGroup(kGroup);
     s.remove(QString());
+    ++m_revision;
     Q_EMIT bindingsChanged();
 }

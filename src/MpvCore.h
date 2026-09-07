@@ -179,6 +179,10 @@ public:
     Q_INVOKABLE void toggleFullscreen();
     Q_INVOKABLE bool isFullscreen();
     Q_INVOKABLE void toggleMinimize();
+    // Compact picture-in-picture mode ("Kis méret"): shrink the floating
+    // window to a small corner box and back. Qt's OS-level minimize is a no-op
+    // on Hyprland without a special workspace, so the key does this instead.
+    Q_INVOKABLE void toggleMiniMode();
     Q_INVOKABLE void hideToTray();
     Q_INVOKABLE void windowFullscreen(bool on);
     Q_INVOKABLE void takeScreenshot();
@@ -384,6 +388,9 @@ public:
     static void renderUpdateCallback(void *context);
 
     void handleWakeup();
+    // Brings the focused Hyprland window to `targetW` x `targetH` via the
+    // relative-resize dispatcher (the Lua config has no absolute variant).
+    void applyWmResizeTo(int targetW, int targetH);
     void updateFromEvents();
 
     mpv_handle *m_handle = nullptr;
@@ -392,6 +399,8 @@ public:
     QPointer<QQuickWindow> m_renderWindow;
     QPointer<QQuickItem> m_renderItem;
     QPointer<QSystemTrayIcon> m_tray;
+    bool m_miniMode = false;
+    bool m_miniTransitioning = false;
     bool m_pendingOpen = false;
     QString m_pendingLocation;
     QStringList m_pendingFiles;

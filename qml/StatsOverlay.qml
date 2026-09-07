@@ -13,9 +13,12 @@ Item {
     required property MpvCore mpv
 
     property bool open: false
-    property var data: ({})
+    // NOTE: do NOT name this `data` — QQuickItem's default property is `data`
+    // (it holds the declarative children); shadowing it silently breaks the
+    // scene-graph parenting of every child below.
+    property var stats: ({})
 
-    visible: open && Object.keys(data).length > 0
+    visible: open && Object.keys(stats).length > 0
     width: 250
     height: col.height + 22
     z: 4
@@ -59,8 +62,8 @@ Item {
     Timer {
         interval: 500
         repeat: true
-        running: statsRoot.open && statsRoot.visible && mpv.mediaReady()
-        onTriggered: statsRoot.data = mpv.stats()
+        running: statsRoot.open && mpv.mediaReady()
+        onTriggered: statsRoot.stats = mpv.stats()
     }
 
     Rectangle {
@@ -77,15 +80,16 @@ Item {
 
     Column {
         id: col
-        anchors.fill: parent
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.topMargin: 11
         anchors.leftMargin: 12
         anchors.rightMargin: 12
-        anchors.topMargin: 11
-        anchors.bottomMargin: 11
         spacing: 3
 
         Repeater {
-            model: statsRoot.rows(statsRoot.data)
+            model: statsRoot.rows(statsRoot.stats)
             delegate: Row {
                 width: parent.width
                 spacing: 8

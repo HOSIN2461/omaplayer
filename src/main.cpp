@@ -119,6 +119,14 @@ int main(int argc, char *argv[])
     auto *keys = new KeyManager(&app);
     engine.rootContext()->setContextProperty(
         QStringLiteral("keyMgr"), keys);
+    // The single playback engine. It is a QML-visible type, but must be ONE
+    // instance, shared by the video item, the control bar, the shortcuts and
+    // the stats overlay. Creating it here (before the QML loads) and exposing
+    // it as a context property guarantees that — the QML side references this
+    // same object instead of instantiating a second `MpvCore {}`.
+    auto *core = MpvCore::instance();
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("playerCore"), core);
     // Pause-overlay metadata (Jellyfin items + optional TMDb for local files).
     qmlRegisterType<MetadataInfo>("Omaplayer.Meta", 1, 0, "MetadataInfo");
     QObject::connect(
