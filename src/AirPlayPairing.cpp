@@ -360,16 +360,27 @@ bool AirPlayPairing::Srp::compute(const QByteArray &pin,
     S = BN_new();
     BN_mod_exp(S, t1, e, N, ctx);
     // K = H(S) — padded or raw S is the other debated bit, see flags.
-    // M = H(H(padN)^H(padg) | H(I) | s | padA | padB | K).
+    // M = H(H(padN)^H(g_min) | H(I) | s | A_min | B_min | K):
+    // srptools hashes every int in MINIMAL form — notably g as a single
+    // 0x05 byte (NOT padded!) and minimal A/B. Full-length values coincide
+    // either way; the g case differs systematically (1 B vs 384 B).
     {
-        const QByteArray padN = bnToPadded(N), padg = bnToPadded(g);
+        const QByteArray padN = bnToPadded(N);
+        const QByteArray gmin = bnToBin(g);
         const QByteArray sBytes = padSInK ? bnToPadded(S) : bnToBin(S);
         K = sha512(sBytes);
-        QByteArray hn = sha512(padN), hg = sha512(padg);
+        QByteArray hn = sha512(padN), hg = sha512(gmin);
+        QByteArray xorb;
+        xorb.resize(hn.size());
         for (int i = 0; i < hn.size(); ++i)
-            hn[i] = hn[i] ^ hg[i];
-        proofM = sha512(hn + sha512(QByteArray("Pair-Setup")) + saltIn
-                        + this->A + bnToPadded(B) + K);
+            xorb[i] = hn[i] ^ hg[i];
+        // Minimal encoding of the XOR (strip leading zeros, keep ≥1 byte).
+        int lead = 0;
+        while (lead + 1 < xorb.size() && xorb.at(lead) == 0)
+            ++lead;
+        const QByteArray aMin = bnToBin(A), bMin = bnToBin(B);
+        proofM = sha512(xorb.mid(lead) + sha512(QByteArray("Pair-Setup"))
+                        + saltIn + aMin + bMin + K);
     }
     ok = true;
 done:
