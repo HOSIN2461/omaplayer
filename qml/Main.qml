@@ -173,10 +173,14 @@ ApplicationWindow {
         }
     }
 
-    // DLNA cast feedback (errors, started/stopped) as toasts.
+    // DLNA cast feedback (errors, started/stopped) as toasts. Errors linger
+    // (12 s) so receiver diagnostics (e.g. Cast detailedErrorCode) stay
+    // readable; info/ok use the default timeout.
     Connections {
         target: cast
-        function onNotice(text, kind) { toastHost.show(text, kind) }
+        function onNotice(text, kind) {
+            toastHost.show(text, kind, kind === "err" ? 12000 : undefined)
+        }
     }
 
     Connections {

@@ -1,12 +1,21 @@
 #include "CastManager.h"
+#include "GoogleCastClient.h"
+#include "AirPlayPairing.h"
+#include "HlsSession.h"
+#include "CastDebug.h"
 
 #include <QFile>
 #include <QFileInfo>
 #include <QHostAddress>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QNetworkAccessManager>
 #include <QNetworkInterface>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QProcess>
+#include <QStandardPaths>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTimer>
@@ -14,12 +23,15 @@
 #include <QUrl>
 #include <QXmlStreamReader>
 
+#include <algorithm>
 #include <memory>
 
 namespace {
 
 constexpr int kSsdpPort = 1900;
-constexpr int kDiscoveryMs = 2500;
+constexpr int kDiscoveryMs = 4000;   // one round; empty rounds auto-retry
+constexpr int kMaxEmptyRounds = 2;   // …this many extra rounds, then give up
+constexpr int kProbeMs = 1000;       // re-broadcast M-SEARCH/PTR while open
 const QByteArray kSearchTarget = "urn:schemas-upnp-org:device:MediaRenderer:1";
 const QByteArray kAvNs = "urn:schemas-upnp-org:service:AVTransport:1";
 
@@ -161,12 +173,21 @@ CastManager::CastManager(QObject *parent)
     : QObject(parent)
     , m_ssdp(new QUdpSocket(this))
     , m_mdns(new QUdpSocket(this))
+    , m_net(new QNetworkAccessManager(this))
+    , m_gcast(new GoogleCastClient(this))
+    , m_pair(new AirPlayPairing(this))
+    , m_hls(new HlsSession(this))
 {
+    connect(m_pair, &AirPlayPairing::notice, this, &CastManager::notice);
+    connect(m_gcast, &GoogleCastClient::notice, this,
+            &CastManager::notice);
+    connect(m_gcast, &GoogleCastClient::loaded, this,
+            &CastManager::onGcastLoaded);
     m_discoverTimer = new QTimer(this);
     m_discoverTimer->setSingleShot(true);
     m_discoverTimer->setInterval(kDiscoveryMs);
     connect(m_discoverTimer, &QTimer::timeout, this, [this] {
-        m_discovering = false;
+        m_queryTimer->stop();
         flushPending();
         // Late mDNS SRV/TXT/A answers may still trickle in after the burst;
         // drain once more shortly so those reach fetchDescription() too.
@@ -178,6 +199,27 @@ CastManager::CastManager(QObject *parent)
     m_drainTimer->setInterval(1500);
     connect(m_drainTimer, &QTimer::timeout, this, [this] {
         flushPending();
+        // Nothing answered this round: re-click the search automatically a
+        // couple of times (slow/multicast-shy boxes), then give up so we do
+        // not probe the LAN forever.
+        if (m_devices.isEmpty() && m_discovering
+            && m_emptyRounds < kMaxEmptyRounds) {
+            ++m_emptyRounds;
+            sendDiscoveryProbes();
+            m_queryTimer->start();
+            m_discoverTimer->start();
+        } else {
+            m_discovering = false;
+            Q_EMIT devicesChanged();
+        }
+    });
+
+    m_queryTimer = new QTimer(this);
+    m_queryTimer->setSingleShot(false);
+    m_queryTimer->setInterval(kProbeMs);
+    connect(m_queryTimer, &QTimer::timeout, this, [this] {
+        if (m_discovering)
+            sendDiscoveryProbes();
     });
 
     connect(m_ssdp, &QUdpSocket::readyRead,
@@ -200,9 +242,12 @@ void CastManager::startDiscovery()
     m_pending.clear();
     m_pendingDesc.clear();
     m_mdnsInstances.clear();
+    m_gcastInstances.clear();
+    m_airplayInstances.clear();
     m_mdnsInfo.clear();
     m_mdnsHosts.clear();
     m_mdnsProbed.clear();
+    m_emptyRounds = 0;
     m_discovering = true;
     if (m_ssdp->state() != QAbstractSocket::BoundState) {
         m_ssdp->bind(QHostAddress::AnyIPv4, 0);
@@ -214,6 +259,17 @@ void CastManager::startDiscovery()
     }
     Q_EMIT devicesChanged();
 
+    startMdns(); // binds the mDNS socket on first use
+    sendDiscoveryProbes();
+    m_queryTimer->start();
+    m_discoverTimer->start();
+}
+
+void CastManager::sendDiscoveryProbes()
+{
+    // One broadcast round: SSDP M-SEARCH (DLNA) + DNS-SD PTR queries (DLNA /
+    // Google Cast / AirPlay). Called on start, every kProbeMs while the
+    // window is open, and on empty-round auto-retry.
     const QByteArray msearch =
         "M-SEARCH * HTTP/1.1\r\n"
         "HOST: 239.255.255.250:1900\r\n"
@@ -221,20 +277,50 @@ void CastManager::startDiscovery()
         "MX: 2\r\n"
         "ST: " + kSearchTarget + "\r\n"
         "\r\n";
-    m_ssdp->writeDatagram(msearch,
-                          QHostAddress(QStringLiteral("239.255.255.250")),
-                          kSsdpPort);
-    m_ssdp->writeDatagram(msearch,
-                          QHostAddress(QStringLiteral("239.255.255.251")),
-                          kSsdpPort);
-    startMdns();
-    m_discoverTimer->start();
+    if (m_ssdp->state() == QAbstractSocket::BoundState) {
+        m_ssdp->writeDatagram(msearch,
+                              QHostAddress(QStringLiteral("239.255.255.250")),
+                              kSsdpPort);
+        m_ssdp->writeDatagram(msearch,
+                              QHostAddress(QStringLiteral("239.255.255.251")),
+                              kSsdpPort);
+    }
+    if (m_mdns->state() == QAbstractSocket::BoundState) {
+        sendMdnsQuery(12, QStringLiteral("_mediarender._tcp.local"));  // PTR
+        sendMdnsQuery(12, QStringLiteral("_googlecast._tcp.local"));   // PTR
+        sendMdnsQuery(12, QStringLiteral("_airplay._tcp.local"));      // PTR
+        // Re-ask SRV/TXT(/A) for instances seen but not yet resolved: their
+        // answers may have been lost (multicast), and without this only a
+        // full manual rescan (which clears the instance lists) would retry.
+        const auto reask = [this](const QStringList &instances) {
+            for (const QString &instance : instances) {
+                if (m_mdnsProbed.contains(instance))
+                    continue;
+                sendMdnsQuery(33, instance); // SRV
+                sendMdnsQuery(16, instance); // TXT
+                const QString target = m_mdnsInfo.value(instance)
+                                           .value(QStringLiteral("target"))
+                                           .toString();
+                if (!target.isEmpty()
+                    && !m_mdnsHosts.contains(target))
+                    sendMdnsQuery(1, target); // A
+            }
+        };
+        reask(m_mdnsInstances);
+        reask(m_gcastInstances);
+        reask(m_airplayInstances);
+    }
 }
 
 void CastManager::stopDiscovery()
 {
     m_discoverTimer->stop();
     m_drainTimer->stop();
+    m_queryTimer->stop();
+    if (m_discovering) {
+        m_discovering = false;
+        Q_EMIT devicesChanged();
+    }
 }
 
 void CastManager::handleSsdp()
@@ -291,6 +377,9 @@ void CastManager::startMdns()
     sendMdnsQuery(12, QStringLiteral("_mediarender._tcp.local"));  // PTR
     sendMdnsQuery(33, QStringLiteral("_mediarender._tcp.local"));  // SRV
     sendMdnsQuery(16, QStringLiteral("_mediarender._tcp.local"));  // TXT
+    // Google Cast + AirPlay service enumeration shares this socket.
+    sendMdnsQuery(12, QStringLiteral("_googlecast._tcp.local"));   // PTR
+    sendMdnsQuery(12, QStringLiteral("_airplay._tcp.local"));      // PTR
 }
 
 void CastManager::sendMdnsQuery(int type, const QString &name)
@@ -304,8 +393,9 @@ void CastManager::sendMdnsQuery(int type, const QString &name)
     dnsPutU16(pkt, 0);                 // ARCOUNT
     pkt += dnsEncodeName(name);
     dnsPutU16(pkt, quint16(type));     // PTR/SRV/TXT
-    dnsPutU16(pkt, 0x8001);            // QU bit + IN class: ask for a unicast
-                                       // reply straight back to our socket
+    dnsPutU16(pkt, 0x0001);            // IN class, QM (multicast reply): QU
+                                       // unicast answers would often land on
+                                       // avahi's 5353 socket instead of ours
     m_mdns->writeDatagram(pkt,
                           QHostAddress(QStringLiteral("224.0.0.251")), 5353);
 }
@@ -346,14 +436,31 @@ void CastManager::handleMdns()
             int rdata = next + 10;
             if (rdata + rdlen > buf.size())
                 break;
-            if (rtype == 12 && owner.endsWith("_mediarender._tcp.local")) {
+            if (rtype == 12) {
                 // PTR answer: owner=service, rdata=instance name.
                 QString instance;
-                if (dnsDecodeName(buf, rdata, &instance) >= 0
-                    && !m_mdnsInstances.contains(instance)) {
-                    m_mdnsInstances.append(instance);
-                    sendMdnsQuery(33, instance); // SRV
-                    sendMdnsQuery(16, instance); // TXT
+                if (dnsDecodeName(buf, rdata, &instance) < 0)
+                    ; // fall through to off update
+                else if (owner.endsWith("_mediarender._tcp.local")) {
+                    if (!m_mdnsInstances.contains(instance)) {
+                        m_mdnsInstances.append(instance);
+                        sendMdnsQuery(33, instance); // SRV
+                        sendMdnsQuery(16, instance); // TXT
+                    }
+                } else if (owner.endsWith("_googlecast._tcp.local")) {
+                    if (!m_gcastInstances.contains(instance)) {
+                        m_gcastInstances.append(instance);
+                        sendMdnsQuery(33, instance); // SRV
+                        sendMdnsQuery(16, instance); // TXT
+                        sendMdnsQuery(1, instance);  // A (some sticks answer here)
+                    }
+                } else if (owner.endsWith("_airplay._tcp.local")) {
+                    if (!m_airplayInstances.contains(instance)) {
+                        m_airplayInstances.append(instance);
+                        sendMdnsQuery(33, instance); // SRV
+                        sendMdnsQuery(16, instance); // TXT
+                        sendMdnsQuery(1, instance);  // A
+                    }
                 }
             } else if (rtype == 33) {
                 // SRV: priority(2) weight(2) port(2) target(name).
@@ -377,7 +484,8 @@ void CastManager::handleMdns()
                     .arg(quint8(buf.at(rdata + 3)));
                 m_mdnsHosts.insert(owner, ip);
             } else if (rtype == 16) {
-                // TXT: path=<...> often carries the device description URL.
+                // TXT: DLNA carries path=<device-desc URL>; Cast/AirPlay
+                // carry fn=<friendly name> (+ model/feature keys we ignore).
                 int p = rdata;
                 const int end = rdata + rdlen;
                 while (p < end) {
@@ -387,9 +495,20 @@ void CastManager::handleMdns()
                     const QByteArray kv = buf.mid(p + 1, len);
                     p += 1 + len;
                     const int eq = kv.indexOf('=');
-                    if (eq > 0 && kv.left(eq).toLower() == "path") {
+                    if (eq <= 0)
+                        continue;
+                    const QByteArray key = kv.left(eq).toLower();
+                    if (key == "path") {
                         QVariantMap info = m_mdnsInfo.value(owner);
                         info[QStringLiteral("path")] = utf8(kv.mid(eq + 1));
+                        m_mdnsInfo.insert(owner, info);
+                    } else if (key == "fn") {
+                        QVariantMap info = m_mdnsInfo.value(owner);
+                        info[QStringLiteral("fn")] = utf8(kv.mid(eq + 1));
+                        m_mdnsInfo.insert(owner, info);
+                    } else if (key == "deviceid") {
+                        QVariantMap info = m_mdnsInfo.value(owner);
+                        info[QStringLiteral("deviceid")] = utf8(kv.mid(eq + 1));
                         m_mdnsInfo.insert(owner, info);
                     }
                 }
@@ -399,7 +518,58 @@ void CastManager::handleMdns()
         // Resolve any instances whose SRV/TXT just arrived.
         for (const QString &instance : std::as_const(m_mdnsInstances))
             mdnsTryResolve(instance);
+        for (const QString &instance : std::as_const(m_gcastInstances))
+            mdnsTryResolveCast(instance, QStringLiteral("googlecast"));
+        for (const QString &instance : std::as_const(m_airplayInstances))
+            mdnsTryResolveCast(instance, QStringLiteral("airplay"));
     }
+}
+
+// Shared helper: turn a resolved _googlecast/_airplay instance into a device
+// entry (no SCDP fetch — the mDNS SRV port + A ip are the control endpoint).
+void CastManager::mdnsTryResolveCast(const QString &instance,
+                                     const QString &type)
+{
+    if (m_mdnsProbed.contains(instance))
+        return;
+    const QVariantMap info = m_mdnsInfo.value(instance);
+    int port = info.value(QStringLiteral("port")).toInt();
+    const QString target = info.value(QStringLiteral("target")).toString();
+    QString ip = m_mdnsHosts.value(target);
+    if (ip.isEmpty())
+        ip = m_mdnsHosts.value(instance);
+    if (port <= 0 || ip.isEmpty())
+        return;
+    if (type == QLatin1String("airplay") && port <= 0)
+        port = 7000;
+    m_mdnsProbed.append(instance);
+    QString name = info.value(QStringLiteral("fn")).toString();
+    if (name.isEmpty()) {
+        // Instance is "<name>._googlecast._tcp.local" — prettify the head.
+        name = instance.section(QLatin1Char('.'), 0, 0);
+        name.replace(QLatin1Char('-'), QLatin1Char(' '));
+        name.replace(QLatin1Char('_'), QLatin1Char(' '));
+    }
+    for (const QVariant &existing : std::as_const(m_devices)) {
+        const QVariantMap m = existing.toMap();
+        if (m.value(QStringLiteral("host")).toString() == ip
+            && m.value(QStringLiteral("port")).toInt() == port
+            && m.value(QStringLiteral("type")).toString() == type)
+            return;
+    }
+    QVariantMap dev;
+    dev[QStringLiteral("name")] = name;
+    dev[QStringLiteral("host")] = ip;
+    dev[QStringLiteral("port")] = port;
+    dev[QStringLiteral("controlUrl")] = QString();
+    dev[QStringLiteral("type")] = type;
+    const QString did =
+        info.value(QStringLiteral("deviceid")).toString();
+    if (!did.isEmpty())
+        dev[QStringLiteral("id")] = did;
+    m_devices.append(dev);
+    sortDevices();
+    Q_EMIT devicesChanged();
 }
 
 void CastManager::mdnsTryResolve(const QString &instance)
@@ -513,6 +683,7 @@ void CastManager::fetchDescription(const QString &location)
             dev[QStringLiteral("host")] = base.host();
             dev[QStringLiteral("port")] = base.port(80);
             dev[QStringLiteral("controlUrl")] = controlUrl;
+            dev[QStringLiteral("type")] = QStringLiteral("dlna");
             // SSDP and mDNS may both report the same renderer; keep one.
             bool dupe = false;
             for (const QVariant &existing : m_devices) {
@@ -523,8 +694,10 @@ void CastManager::fetchDescription(const QString &location)
                     break;
                 }
             }
-            if (!dupe)
+            if (!dupe) {
                 m_devices.append(dev);
+                sortDevices();
+            }
         }
         m_pendingDesc.removeAll(location);
         if (m_pendingDesc.isEmpty())
@@ -601,74 +774,221 @@ void CastManager::soap(int deviceIndex, const QString &action,
     });
 }
 
+bool CastManager::ensureServer()
+{
+    if (!m_server && !(m_server = new QTcpServer(this)))
+        return false;
+    if (!m_server->isListening()) {
+        // Stable port so a LAN firewall rule (ufw) can allow it once;
+        // ephemeral fallback when occupied.
+        static constexpr quint16 kCastPort = 8099;
+        if (!m_server->listen(QHostAddress::AnyIPv4, kCastPort)
+            && !m_server->listen(QHostAddress::AnyIPv4, 0)) {
+            Q_EMIT notice(tr("Cast kiszolgáló indítása nem sikerült"), "err");
+            return false;
+        }
+    }
+    if (m_server->isListening() && !m_serverRunning) {
+        m_serverRunning = true;
+        Q_EMIT serverStateChanged();
+        connect(m_server, &QTcpServer::newConnection, this, [this] {
+            while (QTcpSocket *client = m_server->nextPendingConnection()) {
+                castDebug(QStringLiteral("http accept peer=%1")
+                              .arg(client->peerAddress().toString()));
+                m_connections.append(client);
+                connect(client, &QTcpSocket::readyRead, this, [this, client] {
+                    if (client->bytesAvailable() < 16)
+                        return;
+                    const QByteArray req = client->readAll();
+                    if (!req.startsWith("GET") && !req.startsWith("HEAD"))
+                        return;
+                    // "GET /<enc> HTTP/1.1" + optional Range: bytes=start-
+                    const int sp = req.indexOf(' ');
+                    const int sp2 = req.indexOf(' ', sp + 1);
+                    if (sp < 0 || sp2 < 0)
+                        return;
+                    const QString rawPath = QUrl::fromPercentEncoding(
+                        req.mid(sp + 1, sp2 - sp - 1));
+                    // Short stable alias for the announced file (typable on a
+                    // phone for network tests, and shorter contentIds).
+                    const QString path = (rawPath == QLatin1String("/cast.mp4")
+                                          || rawPath == QLatin1String("/cast"))
+                        ? m_castPath
+                        : rawPath;
+                    qint64 start = 0;
+                    qint64 end = -1; // inclusive; -1 = to EOF
+                    bool hasRange = false;
+                    const QByteArray lower = req.toLower();
+                    const int ri = lower.indexOf("range: bytes=");
+                    if (ri >= 0) {
+                        const int e = lower.indexOf("\r\n", ri);
+                        const QByteArray spec = req.mid(ri + 13, e - (ri + 13))
+                                                    .trimmed();
+                        const int dash = spec.indexOf('-');
+                        if (dash > 0) {
+                            start = spec.left(dash).trimmed().toLongLong(
+                                &hasRange);
+                            hasRange = hasRange && start >= 0;
+                            if (hasRange && dash + 1 < spec.size()) {
+                                bool okEnd = false;
+                                const qint64 endVal = spec.mid(dash + 1).trimmed()
+                                                          .toLongLong(&okEnd);
+                                if (okEnd && endVal >= start)
+                                    end = endVal;
+                            }
+                        }
+                    }
+                    serveFile(client, path, start, hasRange, end);
+                });
+                connect(client, &QTcpSocket::disconnected, this,
+                        [this, client] {
+                            m_connections.removeAll(client);
+                            client->deleteLater();
+                        });
+            }
+        });
+    }
+    return true;
+}
+
+QString CastManager::deviceType(int deviceIndex) const
+{
+    if (deviceIndex < 0 || deviceIndex >= m_devices.size())
+        return {};
+    const QString t = m_devices.at(deviceIndex).toMap()
+                          .value(QStringLiteral("type")).toString();
+    return t.isEmpty() ? QStringLiteral("dlna") : t; // legacy entries
+}
+
+void CastManager::requestCast(int deviceIndex, const QString &filePath,
+                               double position)
+{
+    const QString file = filePath;
+    QTimer::singleShot(0, this, [this, deviceIndex, file, position] {
+        cast(deviceIndex, file, position);
+    });
+}
+
+QString CastManager::deviceKey(const QVariantMap &dev)
+{    return dev.value(QStringLiteral("type")).toString()
+        + QLatin1Char('\x1f') + dev.value(QStringLiteral("host")).toString()
+        + QLatin1Char(':') + dev.value(QStringLiteral("port")).toString();
+}
+
+int CastManager::findDevice(const QString &key) const
+{
+    if (key.isEmpty())
+        return -1;
+    for (int i = 0; i < m_devices.size(); ++i) {
+        if (deviceKey(m_devices.at(i).toMap()) == key)
+            return i;
+    }
+    return -1;
+}
+
+void CastManager::setActive(int deviceIndex)
+{
+    m_activeDevice = deviceIndex;
+    m_activeKey = (deviceIndex >= 0 && deviceIndex < m_devices.size())
+        ? deviceKey(m_devices.at(deviceIndex).toMap())
+        : QString();
+    m_activeType = deviceType(deviceIndex);
+    Q_EMIT activeChanged();
+}
+
+// Stable row order (type, then name, then host) so a row keeps meaning
+// across scans; the active target is re-resolved by key after sorting.
+void CastManager::sortDevices()
+{
+    const auto rank = [](const QVariantMap &m) {
+        const QString t = m.value(QStringLiteral("type")).toString();
+        if (t == QLatin1String("googlecast"))
+            return 0;
+        if (t == QLatin1String("airplay"))
+            return 1;
+        return 2;
+    };
+    std::sort(m_devices.begin(), m_devices.end(),
+              [&](const QVariant &a, const QVariant &b) {
+                  const QVariantMap ma = a.toMap(), mb = b.toMap();
+                  if (rank(ma) != rank(mb))
+                      return rank(ma) < rank(mb);
+                  const int n = QString::localeAwareCompare(
+                      ma.value(QStringLiteral("name")).toString(),
+                      mb.value(QStringLiteral("name")).toString());
+                  if (n != 0)
+                      return n < 0;
+                  return ma.value(QStringLiteral("host")).toString()
+                      < mb.value(QStringLiteral("host")).toString();
+              });
+    if (!m_activeKey.isEmpty())
+        m_activeDevice = findDevice(m_activeKey);
+}
+
 bool CastManager::cast(int deviceIndex, const QString &filePath, double position)
 {
+    qInfo() << "cast: click idx=" << deviceIndex << "file=" << filePath
+            << "pos=" << position << "devices=" << m_devices.size();
     if (deviceIndex < 0 || deviceIndex >= m_devices.size()) {
-        Q_EMIT notice(tr("Először keress DLNA renderert"), "err");
+        Q_EMIT notice(tr("Először keress eszközt a hálózaton"), "err");
         return false;
     }
     if (filePath.isEmpty() || !QFileInfo(filePath).isFile()) {
         Q_EMIT notice(tr("Csak helyi fájlt lehet kivetíteni"), "err");
         return false;
     }
-    if (!m_server && !(m_server = new QTcpServer(this)))
-        return false;
-    if (!m_server->isListening() && !m_server->listen(QHostAddress::AnyIPv4, 0)) {
-        Q_EMIT notice(tr("Cast kiszolgáló indítása nem sikerült"), "err");
-        return false;
+    const QString type = deviceType(deviceIndex);
+    const QString local = QFileInfo(filePath).canonicalFilePath();
+    // Mark the target active right away (even while converting) so the
+    // panel never shows a stale device as connected.
+    setActive(deviceIndex);
+    // Chromecast/AirPlay only speak a narrow set of streams (MP4/H.264 +
+    // stereo AAC). Anything else goes live-HLS (no full pre-transcode);
+    // DLNA TVs play MKV/E-AC-3 natively, so they always go direct.
+    if ((type == QLatin1String("googlecast")
+         || type == QLatin1String("airplay"))
+        && needsConversion(local)) {
+        startHls(deviceIndex, local, position);
+        return true;
     }
-    if (m_server->isListening() && !m_serverRunning) {
-        m_serverRunning = true;
-        Q_EMIT serverStateChanged();
-    }
-    connect(m_server, &QTcpServer::newConnection, this, [this] {
-        while (QTcpSocket *client = m_server->nextPendingConnection()) {
-            connect(client, &QTcpSocket::readyRead, this, [this, client] {
-                if (client->bytesAvailable() < 16)
-                    return;
-                const QByteArray req = client->readAll();
-                if (!req.startsWith("GET"))
-                    return;
-                // "GET /<enc> HTTP/1.1" + optional Range: bytes=start-
-                const int sp = req.indexOf(' ');
-                const int sp2 = req.indexOf(' ', sp + 1);
-                if (sp < 0 || sp2 < 0)
-                    return;
-                const QString path = QUrl::fromPercentEncoding(
-                    req.mid(sp + 1, sp2 - sp - 1));
-                qint64 start = 0;
-                bool hasRange = false;
-                const QByteArray lower = req.toLower();
-                const int ri = lower.indexOf("range: bytes=");
-                if (ri >= 0) {
-                    const int e = lower.indexOf("\r\n", ri);
-                    const QByteArray spec = req.mid(ri + 13, e - (ri + 13)).trimmed();
-                    const int dash = spec.indexOf('-');
-                    if (dash > 0) {
-                        start = spec.left(dash).trimmed().toLongLong(&hasRange);
-                        hasRange = hasRange && start >= 0;
-                    }
-                }
-                serveFile(client, path, start, hasRange);
-            });
-            connect(client, &QTcpSocket::disconnected, this,
-                    [this, client] { m_connections.removeAll(client); });
-        }
-    });
-    m_castPath = QFileInfo(filePath).canonicalFilePath();
-    m_castUrl = QStringLiteral("http://%1:%2/%3")
+    continueCast(deviceIndex, local, position);
+    return true;
+}
+
+void CastManager::continueCast(int deviceIndex, const QString &localPath,
+                               double position)
+{
+    if (!ensureServer())
+        return;
+    m_castPath = localPath;
+    // Encoded path already starts with '/' — no extra separator, otherwise
+    // the URL gets a '//' after the port.
+    m_castUrl = QStringLiteral("http://%1:%2%3")
         .arg(localIp())
         .arg(m_server->serverPort())
         .arg(QString::fromLatin1(
             QUrl::toPercentEncoding(m_castPath, "/", "")));
-    m_activeDevice = deviceIndex;
-    Q_EMIT activeChanged();
+    castDebug(QStringLiteral("cast idx=%1 type=%2 url=%3")
+                  .arg(deviceIndex)
+                  .arg(m_activeType, m_castUrl));
+    setActive(deviceIndex); // panel shows the target right away
+    Q_EMIT serverStateChanged();
 
+    if (m_activeType == QLatin1String("googlecast")) {
+        castGoogle(deviceIndex, position);
+        return;
+    }
+    if (m_activeType == QLatin1String("airplay")) {
+        castAirPlay(deviceIndex, position);
+        return;
+    }
     const auto sendPlay = [this] {
         soap(m_activeDevice, QStringLiteral("Play"), -1.0, [this](bool ok) {
+            if (!ok)
+                setActive(-1); // never connected
             Q_EMIT notice(ok ? tr("Kivetítve: %1").arg(activeDeviceName())
                              : tr("Lejátszás indítása nem sikerült"),
-                          ok ? QStringLiteral("ok") : QStringLiteral("err"));
+                           ok ? QStringLiteral("ok") : QStringLiteral("err"));
         });
     };
     soap(m_activeDevice, QStringLiteral("SetAVTransportURI"), -1.0,
@@ -678,39 +998,619 @@ bool CastManager::cast(int deviceIndex, const QString &filePath, double position
                  if (position > 2.0)
                      castSeek(position);
              } else {
+                 setActive(-1); // never connected
                  Q_EMIT notice(tr("Kivetítés indítása nem sikerült"), "err");
              }
          });
-    return true;
+}
+
+namespace {
+
+// ffprobe view of a file for the cast decision: first video codec plus
+// whether the whole file is directly Cast-playable.
+struct CastProbe {
+    QString vcodec;
+    double duration = 0.0; // seconds (0 = unknown)
+    bool direct = false; // no conversion needed
+};
+
+CastProbe probeForCast(const QString &path)
+{
+    CastProbe out;
+    QProcess probe;
+    probe.start(QStandardPaths::findExecutable(QStringLiteral("ffprobe")),
+                {QStringLiteral("-v"), QStringLiteral("error"),
+                 QStringLiteral("-show_entries"),
+                 QStringLiteral("format=duration:stream=codec_name,channels"),
+                 QStringLiteral("-of"), QStringLiteral("json"), path});
+    if (!probe.waitForFinished(10000) || probe.exitCode() != 0)
+        return out;
+    const QJsonDocument doc = QJsonDocument::fromJson(probe.readAllStandardOutput());
+    const QJsonObject root = doc.object();
+    out.duration = root.value(QStringLiteral("format")).toObject()
+                       .value(QStringLiteral("duration")).toString().toDouble();
+    const QJsonArray streams = root.value(QStringLiteral("streams")).toArray();
+    bool haveVideo = false, videoOk = false, audioOk = true;
+    for (const QJsonValue &v : streams) {
+        const QJsonObject s = v.toObject();
+        const QString codec = s.value(QStringLiteral("codec_name")).toString();
+        if (!haveVideo && !codec.isEmpty() && codec != QLatin1String("mjpeg")
+            && codec != QLatin1String("png")) {
+            haveVideo = true;
+            out.vcodec = codec;
+            videoOk = (codec == QLatin1String("h264"));
+        } else if (haveVideo && !codec.isEmpty()
+                   && codec != QLatin1String("mjpeg")
+                   && codec != QLatin1String("png")
+                   && codec != QLatin1String("subrip")
+                   && codec != QLatin1String("ass")
+                   && codec != QLatin1String("mov_text")) {
+            // Audio (or other playable) stream: only stereo AAC passes.
+            const int ch = s.value(QStringLiteral("channels")).toInt(2);
+            if (codec != QLatin1String("aac") || ch > 2)
+                audioOk = false;
+        }
+    }
+    out.direct = haveVideo && videoOk && audioOk;
+    // Direct play additionally needs an MP4-family container.
+    if (out.direct) {
+        const QString ext = QFileInfo(path).suffix().toLower();
+        out.direct = (ext == QLatin1String("mp4")
+                      || ext == QLatin1String("m4v")
+                      || ext == QLatin1String("mov"));
+    }
+    return out;
+}
+
+} // namespace
+
+bool CastManager::needsConversion(const QString &path) const
+{
+    if (QStandardPaths::findExecutable(QStringLiteral("ffprobe")).isEmpty())
+        return false; // cannot judge — try direct, receiver will complain
+    return !probeForCast(path).direct;
+}
+
+QString CastManager::conversionCachePath(const QString &path) const
+{
+    QDir dir(QStandardPaths::writableLocation(QStandardPaths::CacheLocation)
+             + QStringLiteral("/cast"));
+    dir.mkpath(QStringLiteral("."));
+    const QFileInfo fi(path);
+    const QString base = fi.completeBaseName().left(60).replace(
+        QLatin1Char('/'), QLatin1Char('_'));
+    return dir.filePath(QStringLiteral("%1-%2-%3.mp4")
+                            .arg(base)
+                            .arg(fi.size())
+                            .arg(fi.lastModified().toSecsSinceEpoch()));
+}
+
+void CastManager::startConversion(int deviceIndex, const QString &path,
+                                  double position)
+{
+    cancelConversion();
+    const QString dst = conversionCachePath(path);
+    // Atomic cache writes: ffmpeg goes to <dst>.part, renamed only on
+    // success — a killed conversion must never poison the cache (a
+    // moov-less partial plays nowhere and fails LOAD on the TV).
+    const QString part = dst + QStringLiteral(".part");
+    QFile::remove(part);
+    m_convertKey = (deviceIndex >= 0 && deviceIndex < m_devices.size())
+        ? deviceKey(m_devices.at(deviceIndex).toMap())
+        : QString();
+    m_convertSrc = path;
+    m_convertPos = position;
+    const QFileInfo dstInfo(dst);
+    if (dstInfo.exists() && dstInfo.size() > (1 << 20)
+        && dstInfo.lastModified() >= QFileInfo(path).lastModified()) {
+        castDebug(QStringLiteral("convert: cache hit %1").arg(dst));
+        const int dev = findDevice(m_convertKey);
+        m_convertKey.clear();
+        if (dev >= 0)
+            continueCast(dev, dst, position);
+        return;
+    }
+    if (QStandardPaths::findExecutable(QStringLiteral("ffmpeg")).isEmpty()) {
+        Q_EMIT notice(tr("Vetítéshez ffmpeg kell (nincs telepítve)"), "err");
+        setActive(-1); // drop the optimistic target
+        m_convertKey.clear();
+        return;
+    }
+    // Video passes through when already H.264; anything else is re-encoded
+    // (slow but plays). Audio always becomes stereo AAC; subs are dropped
+    // (TV-side subtitle track would need a second feature).
+    const CastProbe probeInfo = probeForCast(path);
+    const bool vcopy = (probeInfo.vcodec == QLatin1String("h264"));
+    m_convertDuration = probeInfo.duration;
+    m_convertProgress = 0.0;
+    Q_EMIT convertProgressChanged();
+    QStringList args = {QStringLiteral("-y"), QStringLiteral("-nostdin"),
+                        QStringLiteral("-v"),
+                        QStringLiteral("error"), QStringLiteral("-i"), path,
+                        QStringLiteral("-map"), QStringLiteral("0:v:0"),
+                        QStringLiteral("-map"), QStringLiteral("0:a?")};
+    if (vcopy)
+        args += {QStringLiteral("-c:v"), QStringLiteral("copy")};
+    else
+        args += {QStringLiteral("-c:v"), QStringLiteral("libx264"),
+                 QStringLiteral("-preset"), QStringLiteral("veryfast"),
+                 QStringLiteral("-crf"), QStringLiteral("21")};
+    args += {QStringLiteral("-c:a"), QStringLiteral("aac"),
+             QStringLiteral("-ac"), QStringLiteral("2"),
+             QStringLiteral("-b:a"), QStringLiteral("160k"),
+             QStringLiteral("-movflags"), QStringLiteral("+faststart"),
+             QStringLiteral("-progress"), QStringLiteral("pipe:1"),
+             QStringLiteral("-nostats"), part};
+    castDebug(QStringLiteral("convert: ffmpeg %1").arg(args.join(' ')));
+    m_convertProc = new QProcess(this);
+    connect(m_convertProc, &QProcess::readyReadStandardOutput, this, [this] {
+        // ffmpeg -progress lines: out_time_ms=12345 … progress=end.
+        const QByteArray out =
+            m_convertProc ? m_convertProc->readAllStandardOutput() : QByteArray();
+        for (const QByteArray &line : out.split('\n')) {
+            if (!line.startsWith("out_time_ms="))
+                continue;
+            const double secs = line.mid(12).trimmed().toLongLong() / 1000000.0;
+            if (m_convertDuration > 1.0) {
+                const double p = qBound(0.0, secs / m_convertDuration, 1.0);
+                if (qAbs(p - m_convertProgress) > 0.005) {
+                    m_convertProgress = p;
+                    Q_EMIT convertProgressChanged();
+                }
+            }
+        }
+    });
+    connect(m_convertProc,
+            QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this, [this, dst, part](int code, QProcess::ExitStatus status) {
+                QProcess *proc = m_convertProc;
+                m_convertProc = nullptr;
+                if (proc)
+                    proc->deleteLater();
+                Q_EMIT convertingChanged();
+                const int dev = findDevice(m_convertKey);
+                const double pos = m_convertPos;
+                m_convertKey.clear();
+                bool renamed = false;
+                if (status == QProcess::NormalExit && code == 0
+                    && QFileInfo(part).size() > (1 << 20)) {
+                    QFile::remove(dst);
+                    renamed = QFile::rename(part, dst);
+                } else {
+                    QFile::remove(part);
+                }
+                m_convertProgress = renamed ? 1.0 : 0.0;
+                Q_EMIT convertProgressChanged();
+                if (renamed) {
+                    castDebug(QStringLiteral("convert: done %1").arg(dst));
+                    Q_EMIT notice(tr("Konvertálva, vetítés indul"), "ok");
+                    if (dev >= 0)
+                        continueCast(dev, dst, pos);
+                    else
+                        setActive(-1);
+                } else {
+                    castDebug(QStringLiteral("convert: FAILED code=%1").arg(code));
+                    Q_EMIT notice(tr("Konvertálás nem sikerült"), "err");
+                    setActive(-1);
+                }
+            });
+    Q_EMIT notice(tr("Konvertálás vetítéshez (sztereó MP4)…"), "info");
+    Q_EMIT convertingChanged();
+    m_convertProc->start(QStandardPaths::findExecutable(
+                             QStringLiteral("ffmpeg")),
+                         args);
+}
+
+void CastManager::cancelConversion()
+{
+    if (!m_convertProc)
+        return;
+    QProcess *proc = m_convertProc;
+    m_convertProc = nullptr;
+    proc->disconnect(this);
+    proc->kill();
+    proc->deleteLater();
+    m_convertKey.clear();
+    m_convertProgress = 0.0;
+    Q_EMIT convertProgressChanged();
+    Q_EMIT convertingChanged();
+}
+
+void CastManager::startHls(int deviceIndex, const QString &path,
+                           double position)
+{
+    stopHls();
+    cancelConversion();
+    // Drop stale single-shot session handlers from a previous attempt.
+    disconnect(m_hls, nullptr, this, nullptr);
+    m_hlsKey = (deviceIndex >= 0 && deviceIndex < m_devices.size())
+        ? deviceKey(m_devices.at(deviceIndex).toMap())
+        : QString();
+    m_hlsSrc = path;
+    m_hlsPos = position;
+    if (QStandardPaths::findExecutable(QStringLiteral("ffmpeg")).isEmpty()) {
+        Q_EMIT notice(tr("Vetítéshez ffmpeg kell (nincs telepítve)"), "err");
+        setActive(-1);
+        m_hlsKey.clear();
+        return;
+    }
+    const QString vcodec = probeForCast(path).vcodec;
+    connect(m_hls, &HlsSession::ready, this,
+            [this](const QString &rel) {
+                const int dev = findDevice(m_hlsKey);
+                if (dev < 0 || !m_hls || !m_hls->running()) {
+                    stopHls();
+                    setActive(-1);
+                    return;
+                }
+                if (!ensureServer()) {
+                    stopHls();
+                    setActive(-1);
+                    return;
+                }
+                m_hlsBusy = false;
+                Q_EMIT hlsBusyChanged();
+                m_hlsMode = true;
+                m_castPath.clear(); // HLS marker: serveFile uses session dir
+                m_castUrl = QStringLiteral("http://%1:%2/hls/%3/%4")
+                                .arg(localIp())
+                                .arg(m_server->serverPort())
+                                .arg(m_hls->id(), rel);
+                castDebug(QStringLiteral("hls ready %1").arg(m_castUrl));
+                Q_EMIT serverStateChanged();
+                // The playlist starts AT the requested position.
+                if (m_activeType == QLatin1String("googlecast"))
+                    castGoogle(dev, 0.0);
+                else if (m_activeType == QLatin1String("airplay"))
+                    castAirPlay(dev, 0.0);
+                else
+                    stopHls();
+            },
+            Qt::SingleShotConnection);
+    connect(m_hls, &HlsSession::failed, this,
+            [this](const QString &why) {
+                castDebug(QStringLiteral("hls failed: %1").arg(why));
+                const int dev = findDevice(m_hlsKey);
+                const QString src = m_hlsSrc;
+                const double pos = m_hlsPos;
+                stopHls();
+                if (dev < 0) {
+                    setActive(-1);
+                    return;
+                }
+                // Fall back to a full cached transcode.
+                Q_EMIT notice(tr("Élő nem indult, teljes konvertálás…"),
+                              "info");
+                startConversion(dev, src, pos);
+            },
+            Qt::SingleShotConnection);
+    m_hlsBusy = true;
+    Q_EMIT hlsBusyChanged();
+    Q_EMIT notice(tr("Élő indítása (HLS)…"), "info");
+    m_hls->start(path, position, vcodec);
+}
+
+void CastManager::stopHls()
+{
+    if (m_hls)
+        m_hls->stop();
+    m_hlsMode = false;
+    if (m_hlsBusy) {
+        m_hlsBusy = false;
+        Q_EMIT hlsBusyChanged();
+    }
+    m_hlsKey.clear();
+}
+
+void CastManager::castGoogle(int deviceIndex, double position)
+{
+    const QVariantMap dev = m_devices.at(deviceIndex).toMap();
+    const QString host = dev.value(QStringLiteral("host")).toString();
+    const quint16 port = quint16(
+        dev.value(QStringLiteral("port")).toInt() ?: 8009);
+    qInfo() << "cast: googlecast host=" << host << "port=" << port
+            << "url=" << m_castUrl;
+    if (host.isEmpty()) {
+        Q_EMIT notice(tr("Google Cast eszköz címe hiányzik"), "err");
+        setActive(-1); // never connected — must not offer "lekapcsolódás"
+        return;
+    }
+    Q_EMIT notice(tr("Csatlakozás: %1…").arg(dev.value(QStringLiteral("name"))
+                                                 .toString()),
+                  "info");
+    // load() queues the payload: if TLS is already up it triggers
+    // GET_STATUS→LOAD at once, otherwise it flushes from onEncrypted().
+    // connectTo() is a no-op when already on this host. The session is
+    // always reset first: a previous STOP/CLOSE leaves a dead transport
+    // behind, and LOADing on it goes nowhere.
+    m_gcast->resetSession();
+    m_gcast->connectTo(host, port);
+    m_gcast->load(m_castUrl,
+                  m_hlsMode ? QStringLiteral("application/x-mpegURL")
+                            : mimeFor(m_castPath),
+                  QFileInfo(m_castPath.isEmpty() ? m_hlsSrc : m_castPath)
+                      .fileName(),
+                  position);
+}
+
+void CastManager::castAirPlay(int deviceIndex, double position)
+{
+    QVariantMap dev =
+        (deviceIndex >= 0 && deviceIndex < m_devices.size())
+        ? m_devices.at(deviceIndex).toMap()
+        : QVariantMap();
+    const QString host = dev.value(QStringLiteral("host")).toString();
+    const int port = dev.value(QStringLiteral("port")).toInt() ?: 7000;
+    if (host.isEmpty()) {
+        Q_EMIT notice(tr("AirPlay eszköz címe hiányzik"), "err");
+        return;
+    }
+    m_pair->setDevice(host, quint16(port),
+                      dev.value(QStringLiteral("id")).toString());
+    if (!m_pair->hasPairing()) {
+        // First contact: TV shows a PIN, user types it into CastPanel.
+        m_pendingAirKey = deviceKey(dev);
+        m_pendingAirPos = position;
+        if (m_pair->begin()) {
+            m_airplayPairing = true;
+            Q_EMIT airplayPairingChanged();
+        } else {
+            m_pendingAirKey.clear();
+        }
+        return;
+    }
+    if (!m_pair->verify()) {
+        // Stale pairing — redo the PIN flow.
+        m_pendingAirKey = deviceKey(dev);
+        m_pendingAirPos = position;
+        if (m_pair->begin()) {
+            m_airplayPairing = true;
+            Q_EMIT airplayPairingChanged();
+        } else {
+            m_pendingAirKey.clear();
+        }
+        return;
+    }
+    postAirPlayPlay(dev, position);
+}
+
+void CastManager::finishAirPlayPair(const QString &pin)
+{
+    if (!m_airplayPairing)
+        return;
+    // Same reentrancy rule as requestCast: the blocking pairing HTTP must
+    // not run inside this QML handler's JS evaluation.
+    const QString code = pin;
+    QTimer::singleShot(0, this, [this, code] { finishAirPlayPairNow(code); });
+}
+
+void CastManager::finishAirPlayPairNow(const QString &pin)
+{
+    if (!m_airplayPairing)
+        return;
+    m_airplayPairing = false;
+    Q_EMIT airplayPairingChanged();
+    if (!m_pair->finish(pin, QStringLiteral("omaplayer"))) {
+        m_pendingAirKey.clear();
+        return; // notice already emitted
+    }
+    if (!m_pair->verify()) {
+        m_pendingAirKey.clear();
+        return;
+    }
+    const int dev = findDevice(m_pendingAirKey);
+    m_pendingAirKey.clear();
+    if (dev < 0) {
+        Q_EMIT notice(tr("AirPlay eszköz eltűnt"), "err");
+        return;
+    }
+    postAirPlayPlay(m_devices.at(dev).toMap(), m_pendingAirPos);
+}
+
+void CastManager::cancelAirPlayPair()
+{
+    m_airplayPairing = false;
+    m_pendingAirKey.clear();
+    Q_EMIT airplayPairingChanged();
+    setActive(-1);
+}
+
+void CastManager::postAirPlayPlay(const QVariantMap &dev, double position)
+{
+    // Legacy video protocol: POST /play with an XML plist. Start-Position is
+    // a 0..1 fraction; without duration we start at 0 then absolute-scrub.
+    // Runs on the verified channel (pairing's connection pool).
+    const QByteArray body =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
+        "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+        "<plist version=\"1.0\"><dict>"
+        "<key>Content-Location</key><string>" + m_castUrl.toUtf8() + "</string>"
+        "<key>Start-Position</key><real>0</real>"
+        "</dict></plist>";
+    const QString host = dev.value(QStringLiteral("host")).toString();
+    const int port = dev.value(QStringLiteral("port")).toInt() ?: 7000;
+    castDebug(QStringLiteral("airplay> POST %1:%2/play len=%3 (verified)")
+                  .arg(host).arg(port).arg(body.size()));
+    auto res = m_pair->postMedia(QStringLiteral("/play"), body,
+                                 QStringLiteral("text/x-apple-plist+xml"));
+    castDebug(QStringLiteral("airplay< /play code=%1 err=%2")
+                  .arg(res.code).arg(res.error));
+    if (!res.ok && res.code == 403) {
+        Q_EMIT notice(
+            tr("AirPlay párosítást (PIN) kér — nem támogatott, "
+               "használd a Google Cast / DLNA sort"),
+            QStringLiteral("err"));
+        setActive(-1);
+        return;
+    }
+    Q_EMIT notice(
+        res.ok ? tr("Kivetítve: %1").arg(
+                     dev.value(QStringLiteral("name")).toString())
+               : tr("AirPlay indítás sikertelen (%1)").arg(res.error),
+        res.ok ? QStringLiteral("ok") : QStringLiteral("err"));
+    if (!res.ok) {
+        setActive(-1); // never connected — must not offer "lekapcsolódás"
+        return;
+    }
+    if (res.ok && position > 2.0) {
+        // Absolute scrub once playback started; best-effort, ignored when
+        // the receiver does not support it.
+        QTimer::singleShot(1500, this, [this, position] {
+            if (m_activeDevice >= 0
+                && m_activeType == QLatin1String("airplay"))
+                castSeek(position);
+        });
+    }
+}
+
+void CastManager::airplayPost(const QVariantMap &dev, const QString &path,
+                              const QByteArray &body,
+                              const QString &contentType)
+{
+    const QString host = dev.value(QStringLiteral("host")).toString();
+    const int port = dev.value(QStringLiteral("port")).toInt() ?: 7000;
+    if (host.isEmpty())
+        return;
+    castDebug(QStringLiteral("airplay> POST %1:%2%3 len=%4")
+                  .arg(host).arg(port).arg(path).arg(body.size()));
+    QNetworkRequest req{QUrl(
+        QStringLiteral("http://%1:%2%3").arg(host).arg(port).arg(path))};
+    req.setHeader(QNetworkRequest::ContentTypeHeader, contentType);
+    req.setTransferTimeout(6000);
+    QNetworkReply *reply = body.isEmpty() ? m_net->post(req, QByteArray())
+                                          : m_net->post(req, body);
+    connect(reply, &QNetworkReply::finished, this,
+            [this, reply, path, dev] {
+                reply->deleteLater();
+                const int code = reply
+                                     ->attribute(QNetworkRequest::
+                                                     HttpStatusCodeAttribute)
+                                     .toInt();
+                const bool ok = reply->error() == QNetworkReply::NoError
+                    || code == 200 || code == 204;
+                castDebug(QStringLiteral("airplay< %1 code=%2 err=%3 body=%4")
+                              .arg(path)
+                              .arg(code)
+                              .arg(reply->errorString())
+                              .arg(QString::fromUtf8(reply->readAll()).left(200)));
+                if (path == QLatin1String("/play")) {
+                    if (!ok && code == 403) {
+                        // AirPlay 2 receivers demand PIN pairing + an
+                        // encrypted control channel (SRP/ed25519); the
+                        // legacy open /play is refused. Say so plainly.
+                        Q_EMIT notice(
+                            tr("AirPlay párosítást (PIN) kér — nem támogatott, "
+                               "használd a Google Cast / DLNA sort"),
+                            QStringLiteral("err"));
+                    } else {
+                        Q_EMIT notice(
+                            ok ? tr("Kivetítve: %1").arg(
+                                     dev.value(QStringLiteral("name")).toString())
+                               : tr("AirPlay indítás sikertelen (%1)")
+                                     .arg(reply->errorString()),
+                            ok ? QStringLiteral("ok") : QStringLiteral("err"));
+                    }
+                } else if (!ok) {
+                    qWarning() << "airplay:" << path << reply->errorString();
+                }
+            });
+}
+
+void CastManager::onGcastLoaded(bool ok)
+{
+    if (!ok && m_activeDevice >= 0
+        && m_activeType == QLatin1String("googlecast")) {
+        Q_EMIT notice(tr("Google Cast betöltés sikertelen"), "err");
+        setActive(-1); // never connected — must not offer "lekapcsolódás"
+    }
 }
 
 void CastManager::castSeek(double position)
 {
     m_lastSeekTarget = position;
-    if (m_activeDevice >= 0)
-        soap(m_activeDevice, QStringLiteral("Seek"), position, nullptr);
+    // Resolve the live row by key: discovery sorts may have shifted indices.
+    const int dev = findDevice(m_activeKey);
+    if (dev < 0)
+        return;
+    m_activeDevice = dev;
+    if (m_activeType == QLatin1String("googlecast")) {
+        m_gcast->seek(position);
+        return;
+    }
+    if (m_activeType == QLatin1String("airplay")) {
+        const QVariantMap map = m_devices.at(dev).toMap();
+        const QString host = map.value(QStringLiteral("host")).toString();
+        const int port = map.value(QStringLiteral("port")).toInt() ?: 7000;
+        if (host.isEmpty())
+            return;
+        QNetworkRequest req{QUrl(QStringLiteral("http://%1:%2/scrub?position=%3")
+                                     .arg(host)
+                                     .arg(port)
+                                     .arg(position, 0, 'f', 1))};
+        req.setTransferTimeout(6000);
+        QNetworkReply *reply = m_net->post(req, QByteArray());
+        connect(reply, &QNetworkReply::finished, reply,
+                &QNetworkReply::deleteLater);
+        return;
+    }
+    soap(m_activeDevice, QStringLiteral("Seek"), position, nullptr);
 }
 
 void CastManager::stopCast()
 {
-    if (m_castUrl.isEmpty())
+    cancelConversion(); // a pending transcode is pointless once stopped
+    stopHls();          // live session teardown (ffmpeg killed, dir gone)
+    m_hlsMode = false;
+    if (m_airplayPairing)
+        cancelAirPlayPair(); // clears target; per-type stop below is skipped
+    if (m_castUrl.isEmpty()) {
+        setActive(-1);
         return;
-    if (m_activeDevice >= 0) {
-        soap(m_activeDevice, QStringLiteral("Stop"), -1.0, nullptr);
-        Q_EMIT notice(tr("Kivetítés leállítva"), "info");
     }
-    m_activeDevice = -1;
-    Q_EMIT activeChanged();
+    const int dev = findDevice(m_activeKey);
+    if (dev >= 0) {
+        m_activeDevice = dev;
+        if (m_activeType == QLatin1String("googlecast")) {
+            m_gcast->stop();
+            Q_EMIT notice(tr("Kivetítés leállítva"), "info");
+        } else if (m_activeType == QLatin1String("airplay")) {
+            airplayPost(m_devices.at(dev).toMap(),
+                        QStringLiteral("/stop"), QByteArray(),
+                        QStringLiteral("application/octet-stream"));
+            Q_EMIT notice(tr("Kivetítés leállítva"), "info");
+        } else {
+            soap(dev, QStringLiteral("Stop"), -1.0, nullptr);
+            Q_EMIT notice(tr("Kivetítés leállítva"), "info");
+        }
+    }
+    m_activeType.clear();
+    setActive(-1);
 }
 
 void CastManager::resumeCast()
 {
-    if (m_activeDevice < 0 || m_castUrl.isEmpty())
+    const int dev = findDevice(m_activeKey);
+    if (dev < 0 || m_castUrl.isEmpty())
         return;
-    soap(m_activeDevice, QStringLiteral("SetAVTransportURI"), -1.0,
+    m_activeDevice = dev;
+    if (m_activeType == QLatin1String("googlecast")) {
+        m_gcast->play();
+        return;
+    }
+    if (m_activeType == QLatin1String("airplay")) {
+        airplayPost(m_devices.at(dev).toMap(),
+                    QStringLiteral("/rate?value=1"), QByteArray(),
+                    QStringLiteral("application/octet-stream"));
+        return;
+    }
+    soap(dev, QStringLiteral("SetAVTransportURI"), -1.0,
          [this](bool ok) {
-             if (ok)
-                 soap(m_activeDevice, QStringLiteral("Play"), -1.0, nullptr);
+             if (ok) {
+                 const int d = findDevice(m_activeKey);
+                 if (d >= 0)
+                     soap(d, QStringLiteral("Play"), -1.0, nullptr);
+             }
          });
 }
 
@@ -725,11 +1625,50 @@ bool CastManager::isCastingCapable(const QString &filePath)
 // --- local HTTP server that streams the cast file --------------------------
 
 void CastManager::serveFile(QTcpSocket *client, const QString &path,
-                            qint64 rangeStart, bool hasRange)
+                            qint64 rangeStart, bool hasRange, qint64 rangeEnd)
 {
+    const QString peer = client->peerAddress().toString();
+    // Live HLS session files (playlist + segments) bypass the single-file
+    // check below; served straight from the session dir.
+    if (m_hls && m_hls->running() && path.startsWith(QLatin1String("/hls/"))) {
+        const QString rest = path.mid(5);
+        const int slash = rest.indexOf(QLatin1Char('/'));
+        QByteArray data, ctype;
+        const bool ok = slash > 0 && rest.left(slash) == m_hls->id()
+            && m_hls->serve(rest.mid(slash + 1), &ctype, &data);
+        if (!ok) {
+            client->write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+            client->disconnectFromHost();
+            return;
+        }
+        qint64 start = 0;
+        if (hasRange)
+            start = qBound<qint64>(0, rangeStart, qMax<qint64>(0, data.size() - 1));
+        const qint64 length = data.size() - start;
+        QByteArray head;
+        if (hasRange) {
+            head = QStringLiteral("HTTP/1.1 206 Partial Content\r\n"
+                                  "Content-Range: bytes %1-%2/%3\r\n")
+                       .arg(start).arg(data.size() - 1).arg(data.size()).toUtf8();
+        } else {
+            head = "HTTP/1.1 200 OK\r\nAccept-Ranges: bytes\r\n";
+        }
+        head += "Content-Length: " + QByteArray::number(length) + "\r\n";
+        head += "Content-Type: " + ctype + "\r\n";
+        if (ctype.contains("mpegURL"))
+            head += "Cache-Control: no-cache\r\n";
+        head += "Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n";
+        client->write(head);
+        client->write(data.mid(int(start)));
+        client->disconnectFromHost();
+        castDebug(QStringLiteral("http hls peer=%1 %2 bytes=%3")
+                      .arg(peer, rest.mid(slash + 1)).arg(length));
+        return;
+    }
     // Only ever serve the file we announced.
     if (!m_castPath.isEmpty()
         && QFileInfo(path).canonicalFilePath() != QFileInfo(m_castPath).canonicalFilePath()) {
+        castDebug(QStringLiteral("http 404 peer=%1 path=%2").arg(peer, path));
         client->write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
         client->disconnectFromHost();
         return;
@@ -744,14 +1683,22 @@ void CastManager::serveFile(QTcpSocket *client, const QString &path,
     const qint64 start = hasRange
         ? qBound<qint64>(0, rangeStart, qMax<qint64>(0, total - 1))
         : 0;
-    const qint64 length = total - start;
+    const qint64 last = (hasRange && rangeEnd >= start)
+        ? qMin(rangeEnd, total - 1)
+        : total - 1;
+    const qint64 length = last - start + 1;
     file->seek(start);
 
+    // Cast receivers (like browsers) require CORS headers on media responses.
+    constexpr const char *kCors =
+        "Access-Control-Allow-Origin: *\r\n"
+        "Access-Control-Allow-Methods: GET, HEAD, OPTIONS\r\n"
+        "Access-Control-Expose-Headers: Content-Length, Content-Range\r\n";
     QByteArray head;
     if (hasRange) {
         head = QStringLiteral("HTTP/1.1 206 Partial Content\r\n"
                               "Content-Range: bytes %1-%2/%3\r\n")
-                   .arg(start).arg(total - 1).arg(total).toUtf8();
+                   .arg(start).arg(last).arg(total).toUtf8();
     } else {
         head = "HTTP/1.1 200 OK\r\nAccept-Ranges: bytes\r\n";
         if (total <= 0)
@@ -761,7 +1708,13 @@ void CastManager::serveFile(QTcpSocket *client, const QString &path,
         head += "Content-Length: " + QByteArray::number(length) + "\r\n";
     }
     head += "Content-Type: " + mimeFor(m_castPath).toUtf8()
-        + "\r\nConnection: close\r\n\r\n";
+        + "\r\n" + kCors + "Connection: close\r\n\r\n";
+    castDebug(QStringLiteral("http %1 peer=%2 range=%3-%4 total=%5")
+                  .arg(hasRange ? QStringLiteral("206") : QStringLiteral("200"))
+                  .arg(peer)
+                  .arg(start)
+                  .arg(last)
+                  .arg(total));
     client->write(head);
 
     // Stream the rest in chunks on bytesWritten so the renderer's read pace

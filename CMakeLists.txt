@@ -6,8 +6,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Quick QuickControls2 DBus Widgets Network)
 find_package(PkgConfig REQUIRED)
+find_package(OpenSSL REQUIRED)
 # The libmpv client library (mpv render API + property/command API).
 pkg_check_modules(MPV REQUIRED IMPORTED_TARGET mpv)
+# libsodium (ed25519/X25519/ChaCha20-Poly1305 for AirPlay pairing).
+pkg_check_modules(SODIUM REQUIRED IMPORTED_TARGET libsodium)
 
 qt_standard_project_setup(REQUIRES 6.5)
 qt_policy(SET QTP0004 NEW)
@@ -26,6 +29,12 @@ qt_add_executable(omaplayer
     src/JellyfinClient.h
     src/CastManager.cpp
     src/CastManager.h
+    src/GoogleCastClient.cpp
+    src/GoogleCastClient.h
+    src/AirPlayPairing.cpp
+    src/AirPlayPairing.h
+    src/HlsSession.cpp
+    src/HlsSession.h
     src/SubtitleClient.cpp
     src/SubtitleClient.h
     src/KeyManager.cpp
@@ -72,6 +81,8 @@ target_link_libraries(omaplayer PRIVATE
     Qt6::Network
     Qt6::DBus
     PkgConfig::MPV
+    PkgConfig::SODIUM
+    OpenSSL::Crypto
 )
 
 # --- Hungarian translation (pre-compiled .qm shipped in-tree) ---
