@@ -1,6 +1,8 @@
 #include "AudioIntroMatcher.h"
+#include "CastDebug.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -21,6 +23,8 @@ namespace {
 
 constexpr int kMaxReferenceFiles = 4;
 constexpr int kHelperTimeoutMs = 300000;
+constexpr double kHeadSeconds = 720.0;  // intro lives in the first 12 min
+constexpr double kTailSeconds = 900.0;  // outro lives in the last 15 min
 
 // Playlist entries whose names match these tokens are ignored as references
 // (mirrors BAD_REFERENCE_FILENAME_REGEX in the upstream detector).
@@ -84,6 +88,31 @@ QString AudioIntroMatcher::findExecutableOr(const QString &name,
 bool AudioIntroMatcher::ready() const
 {
     return !m_node.isEmpty() && !m_ffmpeg.isEmpty();
+}
+
+bool AudioIntroMatcher::isSeriesPath(const QString &path)
+{
+    AudioIntroMatcher tmp;
+    const Parsed p = tmp.parseSeasonEpisode(filenameStem(path));
+    return p.valid && !p.isSpecial;
+}
+
+double AudioIntroMatcher::probeDuration(const QString &ffmpeg,
+                                        const QString &path)
+{
+    // ffprobe ships next to ffmpeg; fall back to PATH resolution.
+    QString ffprobe = QFileInfo(ffmpeg).dir().filePath(QStringLiteral("ffprobe"));
+    if (!QFileInfo(ffprobe).isExecutable())
+        ffprobe = QStringLiteral("ffprobe");
+    QProcess probe;
+    probe.start(ffprobe,
+                {QStringLiteral("-v"), QStringLiteral("error"),
+                 QStringLiteral("-show_entries"),
+                 QStringLiteral("format=duration"), QStringLiteral("-of"),
+                 QStringLiteral("default=noprint_wrappers=1:nokey=1"), path});
+    if (!probe.waitForFinished(8000) || probe.exitCode() != 0)
+        return 0.0;
+    return probe.readAllStandardOutput().trimmed().toDouble();
 }
 
 bool AudioIntroMatcher::isVideoPath(const QString &path)
@@ -298,24 +327,23 @@ QStringList AudioIntroMatcher::selectReferences(const QStringList &playlist,
         for (const Candidate &c : candidates)
             byIndex.insert(c.index, &c);
 
-        // Contiguous same-season run around the current episode.
-        int previousEpisode = current.episode;
+        // Same-season run around the current episode. Playlist order is NOT
+        // episode order (reversed/shuffled lists exist), so no monotonicity
+        // requirement — any same-season episode works as a reference, and
+        // the distance sort below prefers close ones anyway.
         for (int i = currentIndex - 1; i >= 0; --i) {
             const Candidate *c = byIndex.value(i, nullptr);
             if (!c || !c->parsed.valid || c->parsed.isSpecial
-                || c->parsed.season != current.season || c->parsed.episode >= previousEpisode)
-                break;
+                || c->parsed.season != current.season)
+                continue;
             selected.push_back(*c);
-            previousEpisode = c->parsed.episode;
         }
-        int nextEpisode = current.episode;
         for (int i = currentIndex + 1; i < playlist.size(); ++i) {
             const Candidate *c = byIndex.value(i, nullptr);
             if (!c || !c->parsed.valid || c->parsed.isSpecial
-                || c->parsed.season != current.season || c->parsed.episode <= nextEpisode)
-                break;
+                || c->parsed.season != current.season)
+                continue;
             selected.push_back(*c);
-            nextEpisode = c->parsed.episode;
         }
 
         std::sort(selected.begin(), selected.end(), [&](const Candidate &a, const Candidate &b) {
@@ -354,19 +382,171 @@ QStringList AudioIntroMatcher::selectReferences(const QStringList &playlist,
 
 void AudioIntroMatcher::detect(const QStringList &playlist, int currentIndex)
 {
-    if (busy() || !ready())
+    if (busy() || !ready()) {
+        castDebug(QStringLiteral("skip: detect blocked busy=%1 ready=%2 node=%3")
+                      .arg(busy())
+                      .arg(ready())
+                      .arg(!m_node.isEmpty()));
         return;
+    }
     if (currentIndex < 0 || currentIndex >= playlist.size())
         return;
 
-    const Parsed current = parseSeasonEpisode(filenameStem(playlist.at(currentIndex)));
-    const QStringList refs = selectReferences(playlist, currentIndex, current);
-    if (refs.isEmpty()) {
-        Q_EMIT noMatch(
-            tr("Nincs használható referencia epizód a lejátszási listában"));
+    const QString mainFile = playlist.at(currentIndex);
+    // Cache first: repeats (and re-opens) never recompute.
+    if (emitCached(mainFile)) {
+        castDebug(QStringLiteral("skip: cache hit %1")
+                      .arg(QFileInfo(mainFile).fileName()));
         return;
     }
-    startHelper(playlist.at(currentIndex), refs);
+
+    const Parsed current = parseSeasonEpisode(filenameStem(mainFile));
+    const QStringList refs = selectReferences(playlist, currentIndex, current);
+    if (refs.isEmpty()) {
+        QStringList names;
+        for (const QString &p : playlist)
+            names << QFileInfo(p).fileName().left(40);
+        castDebug(QStringLiteral("skip: no refs for %1 (list: %2)")
+                      .arg(QFileInfo(mainFile).fileName(), names.join('|')));
+        // No references: fingerprinting is impossible, but the single-file
+        // credits heuristic still applies (movies included).
+        startCreditsHeuristic(mainFile, probeDuration(m_ffmpeg, mainFile));
+        return;
+    }
+    castDebug(QStringLiteral("skip: detect %1 refs=%2")
+                  .arg(QFileInfo(mainFile).fileName()).arg(refs.size()));
+    startExcerpts(mainFile, refs);
+}
+
+QString AudioIntroMatcher::cachePathFor(const QString &path) const
+{
+    const QFileInfo fi(path);
+    const QString baseDir = QStandardPaths::writableLocation(
+        QStandardPaths::CacheLocation);
+    if (baseDir.isEmpty())
+        return {};
+    const QString key = QStringLiteral("%1-%2-%3")
+                            .arg(fi.size())
+                            .arg(fi.lastModified().toSecsSinceEpoch())
+                            .arg(QString::fromLatin1(
+                                QCryptographicHash::hash(path.toUtf8(),
+                                                         QCryptographicHash::Sha1)
+                                    .toHex()
+                                    .left(16)));
+    return baseDir + QStringLiteral("/intro-v1/") + key
+        + QStringLiteral(".json");
+}
+
+bool AudioIntroMatcher::emitCached(const QString &path)
+{
+    const QString cachePath = cachePathFor(path);
+    if (cachePath.isEmpty())
+        return false;
+    QFile f(cachePath);
+    if (!f.open(QIODevice::ReadOnly))
+        return false;
+    const QJsonObject root =
+        QJsonDocument::fromJson(f.readAll()).object();
+    bool any = false;
+    const QJsonArray intro = root.value(QLatin1String("intro")).toArray();
+    if (intro.size() == 2 && intro.at(1).toDouble() > intro.at(0).toDouble()) {
+        Q_EMIT sectionFound(intro.at(0).toDouble(), intro.at(1).toDouble());
+        any = true;
+    }
+    const QJsonArray outro = root.value(QLatin1String("outro")).toArray();
+    if (outro.size() == 2 && outro.at(1).toDouble() > outro.at(0).toDouble()) {
+        Q_EMIT outroFound(outro.at(0).toDouble(), outro.at(1).toDouble());
+        any = true;
+    }
+    return any;
+}
+
+void AudioIntroMatcher::storeCache(const QString &key, const QString &which,
+                                   double start, double end)
+{
+    if (key.isEmpty())
+        return;
+    QJsonObject root;
+    QFile f(key);
+    if (f.open(QIODevice::ReadOnly))
+        root = QJsonDocument::fromJson(f.readAll()).object();
+    QJsonArray arr;
+    arr.append(start);
+    arr.append(end);
+    root[which] = arr;
+    QDir().mkpath(QFileInfo(key).path());
+    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        f.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
+}
+
+void AudioIntroMatcher::startExcerpts(const QString &mainFile,
+                                      const QStringList &refs)
+{
+    m_mainPath = mainFile;
+    m_cacheKey = cachePathFor(mainFile);
+    m_mainDur = probeDuration(m_ffmpeg, mainFile);
+    if (m_mainDur <= 0.0) {
+        Q_EMIT noMatch(tr("A fájl hossza nem olvasható"));
+        return;
+    }
+    m_tailOffset = qMax(0.0, m_mainDur - kTailSeconds);
+    m_excerptDir = QStandardPaths::writableLocation(
+                       QStandardPaths::CacheLocation)
+        + QStringLiteral("/audio-excerpts/")
+        + QFileInfo(m_cacheKey.isEmpty() ? mainFile : m_cacheKey)
+              .baseName();
+    QDir().mkpath(m_excerptDir);
+
+    // Head trims (intro hunt) + tail trims (outro hunt), video-copy fast.
+    m_trimQueue.clear();
+    const QStringList all = QStringList{ mainFile } + refs;
+    for (int i = 0; i < all.size(); ++i) {
+        const QString head =
+            m_excerptDir + QStringLiteral("/h%1.mkv").arg(i);
+        m_trimQueue.push_back(
+            { {QStringLiteral("-y"), QStringLiteral("-nostdin"),
+               QStringLiteral("-v"), QStringLiteral("error"), QStringLiteral("-i"),
+               all.at(i), QStringLiteral("-t"),
+               QString::number(kHeadSeconds, 'f', 0), QStringLiteral("-c"),
+               QStringLiteral("copy"), head},
+              head });
+        const QString tail =
+            m_excerptDir + QStringLiteral("/t%1.mkv").arg(i);
+        m_trimQueue.push_back(
+            { {QStringLiteral("-y"), QStringLiteral("-nostdin"),
+               QStringLiteral("-v"), QStringLiteral("error"),
+               QStringLiteral("-sseof"),
+               QString::number(-kTailSeconds, 'f', 0), QStringLiteral("-i"),
+               all.at(i), QStringLiteral("-c"), QStringLiteral("copy"), tail},
+              tail });
+    }
+    m_helperKind = 0;
+    runNextTrim();
+}
+
+void AudioIntroMatcher::runNextTrim()
+{
+    if (m_trimQueue.isEmpty()) {
+        // All excerpts ready: intro run on heads.
+        QStringList headRefs;
+        for (int i = 1; QFile::exists(m_excerptDir
+                                      + QStringLiteral("/h%1.mkv").arg(i));
+             ++i)
+            headRefs << m_excerptDir + QStringLiteral("/h%1.mkv").arg(i);
+        m_helperKind = 0;
+        startHelper(m_excerptDir + QStringLiteral("/h0.mkv"), headRefs);
+        return;
+    }
+    const TrimJob job = m_trimQueue.takeFirst();
+    if (m_trimProc) {
+        m_trimProc->deleteLater();
+        m_trimProc = nullptr;
+    }
+    m_trimProc = new QProcess(this);
+    connect(m_trimProc,
+            QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this, [this](int, QProcess::ExitStatus) { runNextTrim(); });
+    m_trimProc->start(m_ffmpeg, job.args);
 }
 
 QString AudioIntroMatcher::ensureScript() const
@@ -452,21 +632,162 @@ void AudioIntroMatcher::onProcessFinished()
     m_proc = nullptr;
 
     const QJsonObject root = QJsonDocument::fromJson(stdoutData).object();
+    double start = -1.0, end = -1.0;
     if (root.value(QLatin1String("ok")).toBool(false)
         && root.contains(QLatin1String("output"))) {
         const QJsonObject intro = root.value(QLatin1String("output"))
                                       .toObject()
                                       .value(QLatin1String("intro"))
                                       .toObject();
-        const double start = intro.value(QLatin1String("start_seconds")).toDouble(-1);
-        const double end = intro.value(QLatin1String("end_seconds")).toDouble(-1);
-        if (start >= 0.0 && end > start)
-            Q_EMIT sectionFound(start, end);
-        else
-            Q_EMIT noMatch(tr("Érvénytelen audio-mérkőzés eredmény"));
-    } else {
-        QString reason = root.value(QLatin1String("message")).toString();
-        Q_EMIT noMatch(reason.isEmpty() ? tr("Nincs ismétlődő intró a referencia epizódokban")
-                                        : reason);
+        start = intro.value(QLatin1String("start_seconds")).toDouble(-1);
+        end = intro.value(QLatin1String("end_seconds")).toDouble(-1);
     }
+    const bool hit = (start >= 0.0 && end > start);
+    castDebug(QStringLiteral("skip: helper kind=%1 hit=%2 %3-%4")
+                  .arg(m_helperKind).arg(hit).arg(start, 0, 'f', 1)
+                  .arg(end, 0, 'f', 1));
+    if (m_helperKind == 0) {
+        if (hit) {
+            storeCache(m_cacheKey, QStringLiteral("intro"), start, end);
+            Q_EMIT sectionFound(start, end);
+        }
+        // Outro run on the tail excerpts (offsets rebased below).
+        QStringList tailRefs;
+        for (int i = 1; QFile::exists(m_excerptDir
+                                      + QStringLiteral("/t%1.mkv").arg(i));
+             ++i)
+            tailRefs << m_excerptDir + QStringLiteral("/t%1.mkv").arg(i);
+        const QString tailMain =
+            m_excerptDir + QStringLiteral("/t0.mkv");
+        if (!tailRefs.isEmpty() && QFile::exists(tailMain)) {
+            m_helperKind = 1;
+            startHelper(tailMain, tailRefs);
+            return;
+        }
+        QDir(m_excerptDir).removeRecursively();
+        if (!hit)
+            Q_EMIT noMatch(tr("Nincs ismétlődő intró a referencia epizódokban"));
+    } else {
+        if (hit) {
+            start += m_tailOffset;
+            end += m_tailOffset;
+            storeCache(m_cacheKey, QStringLiteral("outro"), start, end);
+            Q_EMIT outroFound(start, end);
+        } else {
+            // Fingerprint found no shared outro: fall back to the
+            // single-file black+quiet heuristic on the same title.
+            startCreditsHeuristic(m_mainPath, m_mainDur);
+        }
+        QDir(m_excerptDir).removeRecursively();
+    }
+}
+
+void AudioIntroMatcher::startCreditsHeuristic(const QString &mainFile,
+                                              double duration)
+{
+    if (mainFile.isEmpty() || duration < 8.0 * 60.0)
+        return; // needs a tail worth scanning
+    if (m_creditProc)
+        return;
+    // Check the cache first: a stored outro (fingerprint or heuristic)
+    // answers instantly.
+    const QString cachePath = cachePathFor(mainFile);
+    if (!cachePath.isEmpty()) {
+        QFile cf(cachePath);
+        if (cf.open(QIODevice::ReadOnly)) {
+            const QJsonArray outro = QJsonDocument::fromJson(cf.readAll())
+                                         .object()
+                                         .value(QLatin1String("outro"))
+                                         .toArray();
+            if (outro.size() == 2
+                && outro.at(1).toDouble() > outro.at(0).toDouble()) {
+                Q_EMIT outroFound(outro.at(0).toDouble(),
+                                  outro.at(1).toDouble());
+                return;
+            }
+        }
+    }
+    m_mainPath = mainFile;
+    m_cacheKey = cachePath;
+    const double winStart = qMax(0.0, duration - 8.0 * 60.0);
+    m_creditBase = winStart;
+    m_creditWin = duration - winStart;
+    castDebug(QStringLiteral("skip: credits heuristic %1 from %2s")
+                  .arg(QFileInfo(mainFile).fileName()).arg(winStart, 0, 'f', 0));
+    m_creditProc = new QProcess(this);
+    connect(m_creditProc,
+            QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this, &AudioIntroMatcher::onCreditsFinished);
+    // One decode pass over the tail: black frames + quiet spans.
+    m_creditProc->start(
+        m_ffmpeg,
+        {QStringLiteral("-y"), QStringLiteral("-nostdin"),
+         QStringLiteral("-v"), QStringLiteral("info"), QStringLiteral("-ss"),
+         QString::number(winStart, 'f', 1), QStringLiteral("-i"), mainFile,
+         QStringLiteral("-vf"),
+         QStringLiteral("blackdetect=d=2:pix_th=0.10"),
+         QStringLiteral("-af"),
+         QStringLiteral("silencedetect=noise=-40dB:d=2"),
+         QStringLiteral("-f"), QStringLiteral("null"),
+         QStringLiteral("-")});
+}
+
+void AudioIntroMatcher::onCreditsFinished()
+{
+    if (!m_creditProc)
+        return;
+    const QByteArray log = m_creditProc->readAllStandardError();
+    m_creditProc->deleteLater();
+    m_creditProc = nullptr;
+
+    // Collect black spans (ffmpeg timestamps relative to the -ss seek).
+    // Credits = black reaching (nearly) to EOF: rolling text over black.
+    // Quiet is NOT required — most credit rolls carry music. False positives
+    // (dark finale scenes) are cut by the EOF-proximity rule below.
+    struct Span {
+        double s = 0.0, e = 0.0;
+    };
+    QVector<Span> blacks;
+    static const QRegularExpression blackRe(
+        QStringLiteral("black_start:(\\S+) black_end:(\\S+)"));
+    for (const QByteArray &raw : log.split('\n')) {
+        const QString line = QString::fromUtf8(raw);
+        const QRegularExpressionMatch m = blackRe.match(line);
+        if (m.hasMatch()) {
+            blacks.push_back({ m.captured(1).toDouble(),
+                               m.captured(2).toDouble() });
+        }
+    }
+    double eof = 0.0;
+    for (const Span &b : blacks)
+        eof = qMax(eof, b.e);
+    // Latest black must touch the true window end (within 20 s): a dark
+    // scene followed by picture is not credits. Total black from the
+    // candidate start ≥ 20 s.
+    double best = -1.0;
+    if (eof > 0.0 && m_creditWin > 0.0 && m_creditWin - eof <= 20.0) {
+        for (const Span &b : blacks) {
+            double total = 0.0;
+            for (const Span &c : blacks) {
+                if (c.e < b.s)
+                    continue;
+                total += qMin(c.e, eof) - qMax(c.s, b.s);
+            }
+            if (total >= 20.0 && m_creditWin - b.e <= 90.0) {
+                if (best < 0.0 || b.s < best)
+                    best = b.s;
+            }
+        }
+    }
+    if (best < 0.0) {
+        castDebug(QStringLiteral("skip: credits heuristic no hit"));
+        return;
+    }
+    // Rebase: the window started at (duration - 480 s); recover duration.
+    const double duration = probeDuration(m_ffmpeg, m_mainPath);
+    const double absStart = qMax(0.0, duration - 8.0 * 60.0) + best;
+    castDebug(QStringLiteral("skip: credits heuristic %1-%2")
+                  .arg(absStart, 0, 'f', 1).arg(duration, 0, 'f', 0));
+    storeCache(m_cacheKey, QStringLiteral("outro"), absStart, duration);
+    Q_EMIT outroFound(absStart, duration);
 }

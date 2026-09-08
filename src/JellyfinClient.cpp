@@ -598,8 +598,55 @@ void JellyfinClient::startPlayback(const QVariantMap &item)
             m_trackSession = sessionId;
             m_trackMediaSource = mediaSourceId;
             m_lastPositionSeconds = resumeSeconds;
+            // 5) Server-side skip segments (intro/recap/outro, if the
+            //    server has a provider). Best-effort, never blocks playback.
+            fetchSegments(item.value(QStringLiteral("id")).toString());
             m_progressTimer->start();
         });
+}
+
+void JellyfinClient::fetchSegments(const QString &itemId)
+{
+    if (itemId.isEmpty() || baseUrl().isEmpty() || token().isEmpty())
+        return;
+    const QUrl url(baseUrl() + QStringLiteral("/MediaSegments/") + itemId
+                   + QLatin1Char('?') + apiKeyQuery(token()));
+    QNetworkReply *reply = m_nam->get(request(url));
+    connect(reply, &QNetworkReply::finished, this, [this, reply] {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError)
+            return; // no provider / old server — silent, chapters still apply
+        QVariantList out;
+        const QJsonArray arr =
+            QJsonDocument::fromJson(reply->readAll()).array();
+        for (const QJsonValue &v : arr) {
+            const QJsonObject o = v.toObject();
+            const QString t = o.value(QStringLiteral("Type")).toString();
+            QString kind;
+            if (t == QLatin1String("Intro") || t == QLatin1String("Commercial"))
+                kind = QStringLiteral("intro");
+            else if (t == QLatin1String("Recap")
+                     || t == QLatin1String("Preview"))
+                kind = QStringLiteral("recap");
+            else if (t == QLatin1String("Outro"))
+                kind = QStringLiteral("credits");
+            else
+                continue;
+            const double start =
+                o.value(QStringLiteral("StartTicks")).toDouble()
+                / double(kTicksPerSecond);
+            const double end =
+                o.value(QStringLiteral("EndTicks")).toDouble()
+                / double(kTicksPerSecond);
+            if (!(end > start))
+                continue;
+            out.append(QVariantMap{{QStringLiteral("type"), kind},
+                                   {QStringLiteral("start"), start},
+                                   {QStringLiteral("end"), end}});
+        }
+        if (!out.isEmpty())
+            Q_EMIT segmentsReady(out);
+    });
 }
 
 void JellyfinClient::stopPlayback()

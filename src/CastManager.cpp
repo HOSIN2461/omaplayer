@@ -606,22 +606,6 @@ void CastManager::mdnsTryResolve(const QString &instance)
     }
 }
 
-QString CastManager::mdnsLocation(const QString &instance) const
-{
-    const QVariantMap info = m_mdnsInfo.value(instance);
-    const int port = info.value(QStringLiteral("port")).toInt();
-    const QString target = info.value(QStringLiteral("target")).toString();
-    const QString ip = m_mdnsHosts.value(target);
-    if (port <= 0 || ip.isEmpty())
-        return {};
-    QString path = info.value(QStringLiteral("path")).toString();
-    if (path.isEmpty())
-        path = QStringLiteral("/");
-    if (!path.startsWith(QLatin1Char('/')))
-        path.prepend(QLatin1Char('/'));
-    return QStringLiteral("http://%1:%2%3").arg(ip).arg(port).arg(path);
-}
-
 void CastManager::appendLocation(const QString &location)
 {
     if (location.isEmpty() || m_pending.contains(location)
@@ -734,12 +718,8 @@ void CastManager::soap(int deviceIndex, const QString &action,
     } else {
         QString extra;
         if (action == QLatin1String("SetAVTransportURI")) {
-            extra = QStringLiteral("<CurrentURI>%1</CurrentURI>")
-                        .arg(m_castUrl.toHtmlEscaped())
-                + QStringLiteral("<CurrentURIMetaData>%1</CurrentURIMetaData>")
-                      .arg(didlFor(QFileInfo(m_castPath).fileName()));
-            // CastURLs with '&' inside .toHtmlEscaped() may confuse picky
-            // renderers; percent-encode instead.
+            // Percent-encoding (not HTML-escaping): picky renderers choke
+            // on '&' inside the URI element.
             extra = QStringLiteral("<CurrentURI>%1</CurrentURI>")
                         .arg(QString::fromUtf8(
                             m_castUrl.toUtf8().toPercentEncoding("/;?:@&=+$,")))
@@ -927,8 +907,6 @@ void CastManager::sortDevices()
 
 bool CastManager::cast(int deviceIndex, const QString &filePath, double position)
 {
-    qInfo() << "cast: click idx=" << deviceIndex << "file=" << filePath
-            << "pos=" << position << "devices=" << m_devices.size();
     if (deviceIndex < 0 || deviceIndex >= m_devices.size()) {
         Q_EMIT notice(tr("Először keress eszközt a hálózaton"), "err");
         return false;
@@ -1308,8 +1286,6 @@ void CastManager::castGoogle(int deviceIndex, double position)
     const QString host = dev.value(QStringLiteral("host")).toString();
     const quint16 port = quint16(
         dev.value(QStringLiteral("port")).toInt() ?: 8009);
-    qInfo() << "cast: googlecast host=" << host << "port=" << port
-            << "url=" << m_castUrl;
     if (host.isEmpty()) {
         Q_EMIT notice(tr("Google Cast eszköz címe hiányzik"), "err");
         setActive(-1); // never connected — must not offer "lekapcsolódás"
@@ -1528,8 +1504,6 @@ void CastManager::onGcastLoaded(bool ok)
 
 void CastManager::castSeek(double position)
 {
-    m_lastSeekTarget = position;
-    // Resolve the live row by key: discovery sorts may have shifted indices.
     const int dev = findDevice(m_activeKey);
     if (dev < 0)
         return;
@@ -1630,7 +1604,7 @@ void CastManager::serveFile(QTcpSocket *client, const QString &path,
     const QString peer = client->peerAddress().toString();
     // Live HLS session files (playlist + segments) bypass the single-file
     // check below; served straight from the session dir.
-    if (m_hls && m_hls->running() && path.startsWith(QLatin1String("/hls/"))) {
+    if (m_hls && m_hls->available() && path.startsWith(QLatin1String("/hls/"))) {
         const QString rest = path.mid(5);
         const int slash = rest.indexOf(QLatin1Char('/'));
         QByteArray data, ctype;

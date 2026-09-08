@@ -66,7 +66,7 @@ ApplicationWindow {
     // (Instantiated in C++ so the seek-thumbs image provider can crop its
     // tiles; exposed to QML as the `thumbs` context property.)
 
-    // DLNA cast to LAN renderers (TVs, VLC, Kodi…).
+    // Cast to LAN targets (DLNA renderers, Google Cast, AirPlay).
     CastManager {
         id: cast
     }
@@ -173,7 +173,7 @@ ApplicationWindow {
         }
     }
 
-    // DLNA cast feedback (errors, started/stopped) as toasts. Errors linger
+    // Cast feedback (errors, started/stopped) as toasts. Errors linger
     // (12 s) so receiver diagnostics (e.g. Cast detailedErrorCode) stay
     // readable; info/ok use the default timeout.
     Connections {
@@ -819,10 +819,10 @@ ApplicationWindow {
                     color: Colors.border
                 }
 
-                // DLNA cast → left drawer with the LAN renderer list (search
+                // Cast → left drawer with the LAN device list (search
                 // + pick + start/stop there; the tiny inline list is gone).
                 MenuRow {
-                    rowText: qsTr("Kivetítés (DLNA)…")
+                    rowText: qsTr("Kivetítés…")
                     glyph: "\uF6C4"                  // FA display-arrow-up
                     onActivate: () => openCast()
                 }
@@ -1365,7 +1365,7 @@ ApplicationWindow {
         jellyfinPanel.open()
     }
 
-    // The context menu's "Kivetítés (DLNA)" → open the left renderer drawer
+    // The context menu's "Kivetítés" → open the left renderer drawer
     // (which kicks off its own discovery). One-drawer rule applies too.
     function openCast() {
         settingsMenu.visible = false
@@ -1960,7 +1960,7 @@ ApplicationWindow {
         height: root.height - bar.height - 16
     }
 
-    // --- DLNA cast drawer (left edge) ------------------------------------
+    // --- cast drawer (left edge) -------------------------------------------
     // Same drawer rules as the others: one open at a time, Esc / outside click
     // closes it, and it never takes window focus (G/L/Esc stay alive).
     CastPanel {

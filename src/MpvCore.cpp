@@ -1,5 +1,6 @@
 #include "MpvCore.h"
 #include "AudioIntroMatcher.h"
+#include "CastDebug.h"
 
 #include <QOpenGLContext>
 #include <QQuickWindow>
@@ -133,6 +134,8 @@ mpv_observe_property(m_handle, 0, "pause", MPV_FORMAT_FLAG);
     m_audioMatcher = new AudioIntroMatcher(this);
     connect(m_audioMatcher, &AudioIntroMatcher::sectionFound,
             this, &MpvCore::onAudioSectionFound);
+    connect(m_audioMatcher, &AudioIntroMatcher::outroFound,
+            this, &MpvCore::onAudioOutroFound);
     connect(m_audioMatcher, &AudioIntroMatcher::noMatch,
             this, &MpvCore::onAudioNoMatch);
 
@@ -663,7 +666,12 @@ void MpvCore::rebuildSkipRanges()
     if (total <= 0.0 || total < kDetectMinDuration)
         return;
 
-    const bool movie = total >= kMovieMinDuration;
+    // Long episodes (double-length, finales) are not movies: series context
+    // — SxxEyy name or playlist run — beats the 90-minute movie rule, so
+    // intro detection stays on for them. Standalone long files keep movie
+    // rules (credits only).
+    const bool movie = total >= kMovieMinDuration
+        && !AudioIntroMatcher::isSeriesPath(m_filePath);
 
     // The title + timing detectors need chapter data; without chapters only
     // the audio-fingerprint detector can help (episode-length media).
@@ -1093,8 +1101,10 @@ void MpvCore::startAudioDetection()
         return;
 
     const QVariantList items = playlistItems();
-    if (items.size() < 2)
+    if (items.size() < 2) {
+        castDebug(QStringLiteral("skip: need playlist, have %1").arg(items.size()));
         return; // audio match requires at least one reference
+    }
 
     QStringList paths;
     paths.reserve(items.size());
@@ -1105,20 +1115,26 @@ void MpvCore::startAudioDetection()
             idx = paths.size();
         paths.append(m.value("path").toString());
     }
-    if (idx < 0 || idx >= paths.size())
+    if (idx < 0 || idx >= paths.size()) {
+        castDebug(QStringLiteral("skip: no current item in playlist"));
         return;
+    }
 
     // Keyed on the actual playlist path — the "path" property observation can
     // lag behind the duration event on first load, so m_filePath may still be
     // empty here. The playlist path is authoritative and always available.
     const QString mainPath = paths.at(idx);
-    if (!QFileInfo::exists(mainPath))
+    if (!QFileInfo::exists(mainPath)) {
+        castDebug(QStringLiteral("skip: main not local"));
         return; // remote/Jellyfin stream — audio matching is local-only
+    }
     if (m_audioScanned.contains(mainPath))
         return;
 
     m_audioScanned.insert(mainPath);
     m_audioDetectionFile = mainPath;
+    castDebug(QStringLiteral("skip: start %1")
+                  .arg(QFileInfo(mainPath).fileName()));
     m_audioMatcher->detect(paths, idx);
 }
 
@@ -1145,6 +1161,46 @@ void MpvCore::onAudioNoMatch(const QString &reason)
     if (!cur.isEmpty() && cur != m_audioDetectionFile)
         return;
     qInfo("Audio intro detection: %s", qPrintable(reason));
+}
+
+void MpvCore::onJellyfinSegments(const QVariantList &segments)
+{
+    if (segments.isEmpty())
+        return;
+    for (int i = m_skipRanges.size() - 1; i >= 0; --i) {
+        const SkipType t = m_skipRanges.at(i).type;
+        if (t == SkipType::Intro || t == SkipType::Recap
+            || t == SkipType::Credits)
+            m_skipRanges.removeAt(i);
+    }
+    for (const QVariant &v : segments) {
+        const QVariantMap m = v.toMap();
+        const QString kind = m.value(QStringLiteral("type")).toString();
+        SkipType type = SkipType::Intro;
+        if (kind == QLatin1String("recap"))
+            type = SkipType::Recap;
+        else if (kind == QLatin1String("credits"))
+            type = SkipType::Credits;
+        const double start = m.value(QStringLiteral("start")).toDouble();
+        const double end = m.value(QStringLiteral("end")).toDouble();
+        if (end > start)
+            m_skipRanges.append({ start, end, type, false });
+    }
+    checkSkipPrompt();
+}
+
+void MpvCore::onAudioOutroFound(double start, double end)
+{
+    const QString cur = currentPlaylistPath();
+    if (!cur.isEmpty() && cur != m_audioDetectionFile)
+        return; // playback moved on before the fingerprint arrived
+    qInfo("Audio outro fingerprint detected: %.1fs–%.1fs", start, end);
+    for (int i = m_skipRanges.size() - 1; i >= 0; --i) {
+        if (m_skipRanges.at(i).type == SkipType::Credits)
+            m_skipRanges.removeAt(i);
+    }
+    m_skipRanges.append({ start, end, SkipType::Credits, false });
+    checkSkipPrompt();
 }
 
 void MpvCore::setVolume(double volume)

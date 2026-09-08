@@ -22,7 +22,6 @@ Item {
 
     function open() {
         visible = true
-        console.log("castpanel: open, starting discovery")
         manager.startDiscovery()
     }
     function close() { visible = false }
@@ -386,13 +385,8 @@ Item {
                             id: devMouse
                             anchors.fill: parent
                             hoverEnabled: true
-                            onPressed: console.log("castpanel: pressed idx=" + index)
                             onClicked: {
                                 const idx = index
-                                console.log("castpanel: click idx=" + idx
-                                            + " name=" + modelData.name
-                                            + " type=" + modelData.type
-                                            + " file=" + mpv.filePath)
                                 if (modelData.name === manager.activeDeviceName) {
                                     manager.stopCast()
                                     panel.close()

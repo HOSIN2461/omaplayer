@@ -169,6 +169,10 @@ int main(int argc, char *argv[])
         // exists, so the connect has a stable target.
         QObject::connect(MpvCore::instance(), &MpvCore::filePathChanged,
                          jellyfin, &JellyfinClient::onFileOpened);
+        // Server-side skip segments (intro/recap/outro) feed the same
+        // skip-button pipeline as chapters and local fingerprinting.
+        QObject::connect(jellyfin, &JellyfinClient::segmentsReady,
+                         MpvCore::instance(), &MpvCore::onJellyfinSegments);
         QDBusConnection bus = QDBusConnection::sessionBus();
         if (bus.isConnected()
             && bus.registerService(QStringLiteral("org.mpris.MediaPlayer2.omaplayer"))) {

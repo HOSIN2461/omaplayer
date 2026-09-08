@@ -52,8 +52,9 @@ public:
     int activeDevice() const { return m_activeDevice; }
     QString activeDeviceName() const;
 
-    // Fire an M-SEARCH and collect MediaRenderer responses for ~2.5 s, then
-    // resolve their AVTransport control URLs from the device descriptions.
+    // Fire an M-SEARCH + DNS-SD probes and collect renderers/Cast/AirPlay
+    // answers for one round, then resolve their control endpoints.
+    // Empty rounds auto-retry a couple of times (multicast is lossy).
     Q_INVOKABLE void startDiscovery();
     Q_INVOKABLE void stopDiscovery();
 
@@ -157,7 +158,6 @@ private:
     void mdnsTryResolve(const QString &instance);
     void mdnsTryResolveCast(const QString &instance, const QString &type);
     void sortDevices();
-    QString mdnsLocation(const QString &instance) const;
     // Feeds a device-description URL into the fetch queue (deduplicated).
     void appendLocation(const QString &location);
     // Sends one unicast M-SEARCH and (maloptional) schedules a drain.
@@ -190,7 +190,6 @@ private:
     QString m_castUrl;           // URL announced to the renderer
     QString m_castPath;          // canonical local path currently served
     QList<QTcpSocket *> m_connections;
-    double m_lastSeekTarget = 0.0;
     int m_activeDevice = -1;
     QString m_activeKey;         // stable id of the active target
     QString m_activeType;        // transport of the active cast session

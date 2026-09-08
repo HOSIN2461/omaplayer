@@ -176,7 +176,6 @@ void GoogleCastClient::connectTo(const QString &host, quint16 port)
     if (m_connected && host == m_host)
         return;
     disconnectFrom();
-    qInfo() << "gcast: TLS connect" << host << (port ? port : 8009);
     m_host = host;
     m_buf.clear();
     m_transportId.clear();
@@ -348,7 +347,6 @@ void GoogleCastClient::sendLoad()
 void GoogleCastClient::onEncrypted()
 {
     m_connected = true;
-    qInfo() << "gcast: TLS up, sending CONNECT";
     Q_EMIT connected();
     sendConnect();
     m_heartbeat->start();
@@ -383,7 +381,6 @@ void GoogleCastClient::onReadyRead()
 
 void GoogleCastClient::onSocketError()
 {
-    qInfo() << "gcast: socket error" << m_socket->errorString();
     Q_EMIT notice(tr("Google Cast kapcsolat hiba: %1")
                       .arg(m_socket->errorString()),
                   QStringLiteral("err"));

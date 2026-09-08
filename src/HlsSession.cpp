@@ -67,14 +67,25 @@ void HlsSession::start(const QString &srcPath, double position,
     connect(m_proc,
             QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
             this, [this](int code, QProcess::ExitStatus status) {
-                if (m_proc && m_polls >= 0) {
-                    // Died during startup (or mid-stream): report once.
+                QProcess *p = m_proc;
+                m_proc = nullptr;
+                if (p)
+                    p->deleteLater();
+                if (m_polls >= 0) {
+                    // Died during startup (or mid-stream before ready).
                     m_polls = -1;
                     Q_EMIT failed(m_lastError.isEmpty()
                                       ? tr("ffmpeg kilépett (%1)").arg(code)
                                       : m_lastError);
+                    stop();
+                    return;
                 }
-                stop();
+                // Natural EOF after serving started: keep the window so
+                // replay/seek-back keeps working until stopCast().
+                if (status == QProcess::NormalExit && code == 0)
+                    m_done = true;
+                else
+                    stop();
             });
     m_proc->start(QStandardPaths::findExecutable(QStringLiteral("ffmpeg")),
                   args);
@@ -130,6 +141,7 @@ void HlsSession::stop()
         m_poll = nullptr;
     }
     m_polls = -1;
+    m_done = false;
     if (m_proc) {
         QProcess *p = m_proc;
         m_proc = nullptr;

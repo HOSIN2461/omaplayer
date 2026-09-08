@@ -277,6 +277,7 @@ private:
     QString promptLabel(SkipType type) const;
     void startAudioDetection();
     void onAudioSectionFound(double start, double end);
+    void onAudioOutroFound(double start, double end);
     void onAudioNoMatch(const QString &reason);
     QString currentPlaylistPath();
     QVector<SkipRange> m_skipRanges;
@@ -392,6 +393,8 @@ public:
     // relative-resize dispatcher (the Lua config has no absolute variant).
     void applyWmResizeTo(int targetW, int targetH);
     void updateFromEvents();
+    // Jellyfin server-side segments (intro/recap/outro).
+    void onJellyfinSegments(const QVariantList &segments);
 
     mpv_handle *m_handle = nullptr;
     mpv_render_context *m_renderContext = nullptr;

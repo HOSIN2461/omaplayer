@@ -73,11 +73,14 @@ public:
 
     // The mpv core signals this whenever the playing path changes. When the
     // new path is not the Jellyfin stream we opened (the user switched to a
-    // local file, CLI argument, playlist advance…), the server session must be
+    // Local file, CLI argument, playlist advance…), the server session must be
     // closed and the info overlay must stop showing the stale Jellyfin card.
     // Wired up in main.cpp (after MpvCore::instance() exists) because the
     // constructor must not force-create the mpv singleton early.
     void onFileOpened(const QString &path);
+    // Media segments (intro/recap/outro, Jellyfin 10.10+) for an item.
+    // Server-side skip data (IntroSkipper/chapter providers); clients decide.
+    void fetchSegments(const QString &itemId);
 
 signals:
     void serversChanged();
@@ -86,6 +89,8 @@ signals:
     void busyChanged();
     void connectionChanged();
     void playingItemChanged();
+    // [{type: "intro"|"recap"|"credits", start, end}] in seconds.
+    void segmentsReady(QVariantList segments);
 
 private:
     void persistServers();

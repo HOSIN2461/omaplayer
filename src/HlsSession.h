@@ -26,6 +26,8 @@ public:
     void start(const QString &srcPath, double position, const QString &vcodec);
     void stop();
     bool running() const { return m_proc != nullptr; }
+    // Servable: streaming, or finished but window retained (replay/seek).
+    bool available() const { return m_proc != nullptr || m_done; }
     QString id() const { return m_id; }
     // Serve playlist/segment bytes for a session-relative name.
     // Returns false (→ caller 404s) for unknown/not-yet-ready names.
@@ -43,5 +45,6 @@ private:
     QProcess *m_proc = nullptr;
     QTimer *m_poll = nullptr;
     int m_polls = 0;
+    bool m_done = false; // ffmpeg reached EOF; window retained for replay
     QString m_lastError;
 };
