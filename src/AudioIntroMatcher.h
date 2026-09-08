@@ -40,6 +40,7 @@ public:
 signals:
     void sectionFound(double start, double end);
     void outroFound(double start, double end);
+    void recapFound(double start, double end);
     void noMatch(const QString &reason);
 
 private:
@@ -59,6 +60,10 @@ private:
     Parsed parseSeasonEpisode(const QString &stem) const;
     QStringList selectReferences(const QStringList &playlist,
                                  int currentIndex, const Parsed &current) const;
+    // Recap sources: same-season EARLIER episodes (recaps quote those).
+    QStringList selectRecapReferences(const QStringList &playlist,
+                                      int currentIndex,
+                                      const Parsed &current) const;
 
     // Result cache (intro + outro JSON) keyed by path+size+mtime.
     QString cachePathFor(const QString &path) const;
@@ -92,6 +97,7 @@ private:
     QString m_excerptDir;
     QString m_mainPath; // original main file (cache key + stale guard)
     QString m_cacheKey;
+    QStringList m_recapRefs; // original earlier-episode files for recap hunt
     double m_mainDur = 0.0;
     int m_helperKind = 0; // 0 = intro (head), 1 = outro (tail)
     double m_tailOffset = 0.0; // added to outro hits

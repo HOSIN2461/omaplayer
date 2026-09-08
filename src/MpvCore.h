@@ -278,6 +278,7 @@ private:
     void startAudioDetection();
     void onAudioSectionFound(double start, double end);
     void onAudioOutroFound(double start, double end);
+    void onAudioRecapFound(double start, double end);
     void onAudioNoMatch(const QString &reason);
     QString currentPlaylistPath();
     QVector<SkipRange> m_skipRanges;

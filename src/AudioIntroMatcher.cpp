@@ -25,6 +25,8 @@ constexpr int kMaxReferenceFiles = 4;
 constexpr int kHelperTimeoutMs = 300000;
 constexpr double kHeadSeconds = 720.0;  // intro lives in the first 12 min
 constexpr double kTailSeconds = 900.0;  // outro lives in the last 15 min
+constexpr double kRecapSeconds = 180.0; // recaps quote the first 3 minutes
+constexpr double kRecapMaxEnd = 150.0;  // …and end within them
 
 // Playlist entries whose names match these tokens are ignored as references
 // (mirrors BAD_REFERENCE_FILENAME_REGEX in the upstream detector).
@@ -380,6 +382,39 @@ QStringList AudioIntroMatcher::selectReferences(const QStringList &playlist,
     return refs;
 }
 
+QStringList AudioIntroMatcher::selectRecapReferences(
+    const QStringList &playlist, int currentIndex, const Parsed &current) const
+{
+    // Earlier same-season episodes, closest first (recaps quote those).
+    struct Candidate {
+        int index = 0;
+        QString path;
+        int episode = 0;
+    };
+    QVector<Candidate> candidates;
+    for (int i = 0; i < playlist.size(); ++i) {
+        if (i == currentIndex)
+            continue;
+        const QString &path = playlist.at(i);
+        if (!isVideoPath(path) || isBadReference(path)
+            || !QFileInfo::exists(path))
+            continue;
+        const Parsed p = parseSeasonEpisode(filenameStem(path));
+        if (!p.valid || p.isSpecial || p.season != current.season
+            || p.episode >= current.episode)
+            continue;
+        candidates.push_back({ i, path, p.episode });
+    }
+    std::sort(candidates.begin(), candidates.end(),
+              [](const Candidate &a, const Candidate &b) {
+                  return a.episode > b.episode; // closest earlier first
+              });
+    QStringList refs;
+    for (int i = 0; i < candidates.size() && i < 2; ++i)
+        refs << candidates.at(i).path;
+    return refs;
+}
+
 void AudioIntroMatcher::detect(const QStringList &playlist, int currentIndex)
 {
     if (busy() || !ready()) {
@@ -402,6 +437,10 @@ void AudioIntroMatcher::detect(const QStringList &playlist, int currentIndex)
 
     const Parsed current = parseSeasonEpisode(filenameStem(mainFile));
     const QStringList refs = selectReferences(playlist, currentIndex, current);
+    m_recapRefs =
+        (current.valid && !current.isSpecial)
+        ? selectRecapReferences(playlist, currentIndex, current)
+        : QStringList();
     if (refs.isEmpty()) {
         QStringList names;
         for (const QString &p : playlist)
@@ -458,6 +497,11 @@ bool AudioIntroMatcher::emitCached(const QString &path)
         Q_EMIT outroFound(outro.at(0).toDouble(), outro.at(1).toDouble());
         any = true;
     }
+    const QJsonArray recap = root.value(QLatin1String("recap")).toArray();
+    if (recap.size() == 2 && recap.at(1).toDouble() > recap.at(0).toDouble()) {
+        Q_EMIT recapFound(recap.at(0).toDouble(), recap.at(1).toDouble());
+        any = true;
+    }
     return any;
 }
 
@@ -498,6 +542,8 @@ void AudioIntroMatcher::startExcerpts(const QString &mainFile,
     QDir().mkpath(m_excerptDir);
 
     // Head trims (intro hunt) + tail trims (outro hunt), video-copy fast.
+    // Plus a 3-minute head of main (r0) and head/tail pairs of earlier
+    // episodes (rh/rt) for the recap hunt (recaps quote those).
     m_trimQueue.clear();
     const QStringList all = QStringList{ mainFile } + refs;
     for (int i = 0; i < all.size(); ++i) {
@@ -519,6 +565,35 @@ void AudioIntroMatcher::startExcerpts(const QString &mainFile,
                QString::number(-kTailSeconds, 'f', 0), QStringLiteral("-i"),
                all.at(i), QStringLiteral("-c"), QStringLiteral("copy"), tail},
               tail });
+    }
+    const QString recapMain = m_excerptDir + QStringLiteral("/r0.mkv");
+    m_trimQueue.push_back(
+        { {QStringLiteral("-y"), QStringLiteral("-nostdin"),
+           QStringLiteral("-v"), QStringLiteral("error"), QStringLiteral("-i"),
+           mainFile, QStringLiteral("-t"),
+           QString::number(kRecapSeconds, 'f', 0), QStringLiteral("-c"),
+           QStringLiteral("copy"), recapMain},
+          recapMain });
+    for (int i = 0; i < m_recapRefs.size(); ++i) {
+        const QString rh =
+            m_excerptDir + QStringLiteral("/rh%1.mkv").arg(i);
+        m_trimQueue.push_back(
+            { {QStringLiteral("-y"), QStringLiteral("-nostdin"),
+               QStringLiteral("-v"), QStringLiteral("error"),
+               QStringLiteral("-i"), m_recapRefs.at(i), QStringLiteral("-t"),
+               QString::number(kHeadSeconds, 'f', 0), QStringLiteral("-c"),
+               QStringLiteral("copy"), rh},
+              rh });
+        const QString rt =
+            m_excerptDir + QStringLiteral("/rt%1.mkv").arg(i);
+        m_trimQueue.push_back(
+            { {QStringLiteral("-y"), QStringLiteral("-nostdin"),
+               QStringLiteral("-v"), QStringLiteral("error"),
+               QStringLiteral("-sseof"),
+               QString::number(-kTailSeconds, 'f', 0), QStringLiteral("-i"),
+               m_recapRefs.at(i), QStringLiteral("-c"), QStringLiteral("copy"),
+               rt},
+              rt });
     }
     m_helperKind = 0;
     runNextTrim();
@@ -667,7 +742,7 @@ void AudioIntroMatcher::onProcessFinished()
         QDir(m_excerptDir).removeRecursively();
         if (!hit)
             Q_EMIT noMatch(tr("Nincs ismétlődő intró a referencia epizódokban"));
-    } else {
+    } else if (m_helperKind == 1) {
         if (hit) {
             start += m_tailOffset;
             end += m_tailOffset;
@@ -677,6 +752,35 @@ void AudioIntroMatcher::onProcessFinished()
             // Fingerprint found no shared outro: fall back to the
             // single-file black+quiet heuristic on the same title.
             startCreditsHeuristic(m_mainPath, m_mainDur);
+        }
+        // Recap run next (its excerpts were trimmed up front).
+        QStringList recapRefs;
+        for (int i = 0; QFile::exists(m_excerptDir
+                                      + QStringLiteral("/rh%1.mkv").arg(i));
+             ++i) {
+            recapRefs << m_excerptDir + QStringLiteral("/rh%1.mkv").arg(i);
+            const QString rt =
+                m_excerptDir + QStringLiteral("/rt%1.mkv").arg(i);
+            if (QFile::exists(rt))
+                recapRefs << rt;
+        }
+        const QString recapMain =
+            m_excerptDir + QStringLiteral("/r0.mkv");
+        if (!recapRefs.isEmpty() && QFile::exists(recapMain)) {
+            m_helperKind = 2;
+            startHelper(recapMain, recapRefs);
+            return;
+        }
+        QDir(m_excerptDir).removeRecursively();
+    } else {
+        // Recap run: r0 starts at file position 0, so offsets are direct.
+        // Only early matches count (a late match is the intro theme, which
+        // the intro run reports with cache).
+        if (hit && end <= kRecapMaxEnd) {
+            storeCache(m_cacheKey, QStringLiteral("recap"), start, end);
+            Q_EMIT recapFound(start, end);
+        } else {
+            castDebug(QStringLiteral("skip: recap no early hit"));
         }
         QDir(m_excerptDir).removeRecursively();
     }

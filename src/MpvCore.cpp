@@ -136,6 +136,8 @@ mpv_observe_property(m_handle, 0, "pause", MPV_FORMAT_FLAG);
             this, &MpvCore::onAudioSectionFound);
     connect(m_audioMatcher, &AudioIntroMatcher::outroFound,
             this, &MpvCore::onAudioOutroFound);
+    connect(m_audioMatcher, &AudioIntroMatcher::recapFound,
+            this, &MpvCore::onAudioRecapFound);
     connect(m_audioMatcher, &AudioIntroMatcher::noMatch,
             this, &MpvCore::onAudioNoMatch);
 
@@ -1200,6 +1202,20 @@ void MpvCore::onAudioOutroFound(double start, double end)
             m_skipRanges.removeAt(i);
     }
     m_skipRanges.append({ start, end, SkipType::Credits, false });
+    checkSkipPrompt();
+}
+
+void MpvCore::onAudioRecapFound(double start, double end)
+{
+    const QString cur = currentPlaylistPath();
+    if (!cur.isEmpty() && cur != m_audioDetectionFile)
+        return; // playback moved on before the fingerprint arrived
+    qInfo("Audio recap fingerprint detected: %.1fs–%.1fs", start, end);
+    for (int i = m_skipRanges.size() - 1; i >= 0; --i) {
+        if (m_skipRanges.at(i).type == SkipType::Recap)
+            m_skipRanges.removeAt(i);
+    }
+    m_skipRanges.append({ start, end, SkipType::Recap, false });
     checkSkipPrompt();
 }
 
