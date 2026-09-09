@@ -1,4 +1,5 @@
 #include "HlsSession.h"
+#include "AppPaths.h"
 
 #include <QProcess>
 #include <QTimer>
@@ -87,7 +88,7 @@ void HlsSession::start(const QString &srcPath, double position,
                 else
                     stop();
             });
-    m_proc->start(QStandardPaths::findExecutable(QStringLiteral("ffmpeg")),
+    m_proc->start(appBundledExecutable(QStringLiteral("ffmpeg")),
                   args);
     m_polls = 0;
     m_poll = new QTimer(this);

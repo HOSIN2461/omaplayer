@@ -1,5 +1,6 @@
 #include "AudioIntroMatcher.h"
 #include "CastDebug.h"
+#include "AppPaths.h"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -76,15 +77,7 @@ AudioIntroMatcher::AudioIntroMatcher(QObject *parent)
 QString AudioIntroMatcher::findExecutableOr(const QString &name,
                                             const QStringList &fallbacks)
 {
-    const QString inPath = QStandardPaths::findExecutable(name);
-    if (!inPath.isEmpty())
-        return inPath;
-    for (const QString &candidate : fallbacks) {
-        const QFileInfo info(candidate);
-        if (info.isExecutable() && !info.isDir())
-            return candidate;
-    }
-    return {};
+    return appBundledExecutable(name, fallbacks);
 }
 
 bool AudioIntroMatcher::ready() const

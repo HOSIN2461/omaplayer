@@ -165,3 +165,52 @@ jobs:
         with:
           name: omaplayer-win64
           path: omaplayer-win64.zip
+
+  macos:
+    name: macOS (Clang, Qt ${{ matrix.qt }})
+    runs-on: macos-14
+    strategy:
+      matrix:
+        qt: ["6.8.2"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ matrix.qt }}
+          cache: true
+
+      - name: brew deps (mpv, libsodium, openssl, ffmpeg, ninja, dylibbundler)
+        run: |
+          brew install mpv libsodium openssl@3 ffmpeg ninja pkg-config dylibbundler
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
+          -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
+          -DPKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix libsodium)/lib/pkgconfig"
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Bundle (macdeployqt + dylibs + ffmpeg + ad-hoc sign)
+        run: |
+          set -e
+          "$QT_ROOT_DIR/bin/macdeployqt" build/omaplayer.app -qmldir=qml
+          dylibbundler -od -b \
+            -x build/omaplayer.app/Contents/MacOS/omaplayer \
+            -d build/omaplayer.app/Contents/libs/
+          cp "$(brew --prefix ffmpeg)/bin/ffmpeg" build/omaplayer.app/Contents/MacOS/
+          cp "$(brew --prefix ffmpeg)/bin/ffprobe" build/omaplayer.app/Contents/MacOS/
+          codesign --force --deep -s - build/omaplayer.app
+          ditto -c -k --keepParent build/omaplayer.app omaplayer-macos.zip
+          ls -la omaplayer-macos.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: omaplayer-macos
+          path: omaplayer-macos.zip

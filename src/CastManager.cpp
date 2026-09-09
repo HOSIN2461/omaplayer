@@ -4,6 +4,7 @@
 #include "AirPlaySession.h"
 #include "HlsSession.h"
 #include "CastDebug.h"
+#include "AppPaths.h"
 
 #include <QFile>
 #include <QFileInfo>
@@ -999,7 +1000,7 @@ CastProbe probeForCast(const QString &path)
 {
     CastProbe out;
     QProcess probe;
-    probe.start(QStandardPaths::findExecutable(QStringLiteral("ffprobe")),
+    probe.start(appBundledExecutable(QStringLiteral("ffprobe")),
                 {QStringLiteral("-v"), QStringLiteral("error"),
                  QStringLiteral("-show_entries"),
                  QStringLiteral("format=duration:stream=codec_name,channels"),
@@ -1047,7 +1048,7 @@ CastProbe probeForCast(const QString &path)
 
 bool CastManager::needsConversion(const QString &path) const
 {
-    if (QStandardPaths::findExecutable(QStringLiteral("ffprobe")).isEmpty())
+    if (appBundledExecutable(QStringLiteral("ffprobe")).isEmpty())
         return false; // cannot judge — try direct, receiver will complain
     return !probeForCast(path).direct;
 }
@@ -1091,7 +1092,7 @@ void CastManager::startConversion(int deviceIndex, const QString &path,
             continueCast(dev, dst, position);
         return;
     }
-    if (QStandardPaths::findExecutable(QStringLiteral("ffmpeg")).isEmpty()) {
+    if (appBundledExecutable(QStringLiteral("ffmpeg")).isEmpty()) {
         Q_EMIT notice(tr("Vetítéshez ffmpeg kell (nincs telepítve)"), "err");
         setActive(-1); // drop the optimistic target
         m_convertKey.clear();
@@ -1177,9 +1178,9 @@ void CastManager::startConversion(int deviceIndex, const QString &path,
             });
     Q_EMIT notice(tr("Konvertálás vetítéshez (sztereó MP4)…"), "info");
     Q_EMIT convertingChanged();
-    m_convertProc->start(QStandardPaths::findExecutable(
-                             QStringLiteral("ffmpeg")),
-                         args);
+    m_convertProc->start(appBundledExecutable(
+                              QStringLiteral("ffmpeg")),
+                          args);
 }
 
 void CastManager::cancelConversion()
@@ -1209,7 +1210,7 @@ void CastManager::startHls(int deviceIndex, const QString &path,
         : QString();
     m_hlsSrc = path;
     m_hlsPos = position;
-    if (QStandardPaths::findExecutable(QStringLiteral("ffmpeg")).isEmpty()) {
+    if (appBundledExecutable(QStringLiteral("ffmpeg")).isEmpty()) {
         Q_EMIT notice(tr("Vetítéshez ffmpeg kell (nincs telepítve)"), "err");
         setActive(-1);
         m_hlsKey.clear();

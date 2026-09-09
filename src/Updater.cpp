@@ -122,6 +122,9 @@ void Updater::checkForUpdates()
 #ifdef Q_OS_WIN
             // Portable ZIP (omaplayer-win64.zip); installed beside the app.
             if (name.endsWith(QLatin1String("-win64.zip"))) {
+#elif defined(Q_OS_MACOS)
+            // App-bundle ZIP (omaplayer-macos.zip); dropped into ~/Applications.
+            if (name.endsWith(QLatin1String("-macos.zip"))) {
 #else
             if (name.contains(QLatin1String("x86_64"))
                 && name.endsWith(QLatin1String(".pkg.tar.zst"))) {
@@ -285,11 +288,12 @@ void Updater::installPackage()
     setStatus(QStringLiteral("Feltelepítve — újraindítás…"));
     QCoreApplication::exit(0);
 #else
-    // Windows portable: self-update from ZIP is not implemented yet —
-    // the user replaces the folder with the freshly downloaded release.
+    // Windows portable / macOS bundle: self-update from ZIP is not
+    // implemented yet — the user replaces the folder (or .app) with the
+    // freshly downloaded release.
     Q_UNUSED(m_downloadPath);
-    setStatus(QStringLiteral("Automatikus telepítés Windows alatt még nem "
-                             "támogatott — töltsd le az új ZIP-et."));
+    setStatus(QStringLiteral("Automatikus telepítés ezen a rendszeren még "
+                             "nem támogatott — töltsd le az új kiadást."));
     setBusy(false);
 #endif
 }

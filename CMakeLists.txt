@@ -15,8 +15,10 @@ if(NOT WIN32 AND NOT PkgConfig_FOUND)
 endif()
 find_package(OpenSSL REQUIRED)
 # The libmpv client library (mpv render API + property/command API).
-# Unix: system pkg-config. Windows (CI/vcpkg or mpv-winbuild): point
-# MPV_ROOT at a tree with include/mpv/client.h and the import library.
+# Linux: system pkg-config. macOS (Homebrew): pkg-config if the .pc ships
+# with the formula, otherwise the brew prefix layout below. Windows
+# (CI/vcpkg or mpv-winbuild): point MPV_ROOT at a tree with
+# include/mpv/client.h and the import library.
 if(WIN32)
     find_path(MPV_INCLUDE_DIR NAMES mpv/client.h PATHS ENV MPV_ROOT
               PATH_SUFFIXES include NO_DEFAULT_PATH)
@@ -24,6 +26,23 @@ if(WIN32)
                  PATHS ENV MPV_ROOT PATH_SUFFIXES lib NO_DEFAULT_PATH)
     if(NOT MPV_INCLUDE_DIR OR NOT MPV_LIBRARY)
         message(FATAL_ERROR "libmpv not found: set MPV_ROOT (include/mpv/client.h + lib)")
+    endif()
+elseif(APPLE)
+    pkg_check_modules(MPV QUIET IMPORTED_TARGET mpv)
+    if(NOT MPV_FOUND)
+        # Homebrew layout (/opt/homebrew, /usr/local, or $HOMEBREW_PREFIX).
+        find_path(MPV_INCLUDE_DIR NAMES mpv/client.h
+                  PATHS ENV HOMEBREW_PREFIX
+                  PATHS /opt/homebrew /usr/local
+                  PATH_SUFFIXES include NO_DEFAULT_PATH)
+        find_library(MPV_LIBRARY NAMES mpv
+                     PATHS ENV HOMEBREW_PREFIX
+                     PATHS /opt/homebrew /usr/local
+                     PATH_SUFFIXES lib NO_DEFAULT_PATH)
+        if(NOT MPV_INCLUDE_DIR OR NOT MPV_LIBRARY)
+            message(FATAL_ERROR "libmpv not found: brew install mpv (or set MPV_ROOT)")
+        endif()
+        set(MPV_USE_MANUAL TRUE)
     endif()
 else()
     pkg_check_modules(MPV REQUIRED IMPORTED_TARGET mpv)
@@ -129,6 +148,21 @@ if(WIN32)
     target_link_libraries(omaplayer PRIVATE ${MPV_LIBRARY})
     # GUI subsystem (no console window); version/product metadata below.
     set_target_properties(omaplayer PROPERTIES WIN32_EXECUTABLE TRUE)
+elseif(APPLE)
+    if(MPV_USE_MANUAL)
+        target_include_directories(omaplayer PRIVATE ${MPV_INCLUDE_DIR})
+        target_link_libraries(omaplayer PRIVATE ${MPV_LIBRARY})
+    else()
+        target_link_libraries(omaplayer PRIVATE PkgConfig::MPV)
+    endif()
+    # App bundle (macdeployqt runs in CI on top of this).
+    set_target_properties(omaplayer PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_GUI_IDENTIFIER "org.omarchy.omaplayer"
+        MACOSX_BUNDLE_BUNDLE_NAME "omaplayer"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+    )
 else()
     target_link_libraries(omaplayer PRIVATE PkgConfig::MPV)
 endif()
