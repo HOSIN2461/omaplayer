@@ -113,8 +113,6 @@ jobs:
             Copy-Item $mpvDll.FullName (Join-Path $env:MPV_ROOT "bin/mpv-2.dll")
           }
           Get-ChildItem $env:MPV_ROOT -Recurse | Select-Object FullName
-        env:
-          MPV_ROOT: ${{ github.workspace }}/mpv-pkg/root
 
       - name: ffmpeg + ffprobe
         shell: pwsh
