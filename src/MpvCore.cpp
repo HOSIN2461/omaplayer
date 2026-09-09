@@ -1223,8 +1223,11 @@ void MpvCore::setVolume(double volume)
 {
     if (!m_handle)
         return;
-    const QByteArray vol = QByteArray::number(volume);
-    mpv_set_property_string(m_handle, "volume", vol.constData());
+    // Integer percent everywhere (no decimal display): every entry point
+    // (keys, wheel, slider, MPRIS) funnels through here.
+    const long v = std::lround(std::clamp(volume, 0.0, 150.0));
+    mpv_set_property_string(m_handle, "volume",
+                            QByteArray::number(v).constData());
 }
 
 void MpvCore::toggleMute()
@@ -1251,7 +1254,11 @@ void MpvCore::toggleFullscreen()
 namespace {
 void dispatchHypr(const QStringList &args)
 {
+#ifdef Q_OS_LINUX
     QProcess::startDetached("hyprctl", args);
+#else
+    Q_UNUSED(args);
+#endif
 }
 } // namespace
 
@@ -1260,6 +1267,7 @@ void dispatchHypr(const QStringList &args)
 void MpvCore::whenHyprState(const QString &key, const char *value, bool isBool,
                             int timeoutMs, const std::function<void()> &then)
 {
+#ifdef Q_OS_LINUX
     auto *p = new QProcess;
     p->setProcessChannelMode(QProcess::MergedChannels);
     QObject::connect(p, &QProcess::finished, this, [this, p, key, value, isBool, timeoutMs, then] {
@@ -1283,6 +1291,14 @@ void MpvCore::whenHyprState(const QString &key, const char *value, bool isBool,
         }
     });
     p->start("hyprctl", { "-j", "activewindow" });
+#else
+    // No Hyprland IPC off Linux: keep the async shape, run the continuation.
+    Q_UNUSED(key);
+    Q_UNUSED(value);
+    Q_UNUSED(isBool);
+    Q_UNUSED(timeoutMs);
+    QTimer::singleShot(0, this, then);
+#endif
 }
 
 void MpvCore::windowFullscreen(bool on)
@@ -1292,6 +1308,7 @@ void MpvCore::windowFullscreen(bool on)
     if (m_fsTransitioning)
         return;
     m_fsTransitioning = true;
+#ifdef Q_OS_LINUX
     if (on) {
         // A pinned window cannot be fullscreened; we drive both the unpin and
         // the fullscreen through the Hyprland IPC (new DSL). This stays
@@ -1311,6 +1328,11 @@ void MpvCore::windowFullscreen(bool on)
             m_fsTransitioning = false;
         });
     }
+#else
+    // No compositor IPC off Linux: plain Qt fullscreen covers every platform.
+    m_renderWindow->setVisibility(on ? QWindow::FullScreen : QWindow::Windowed);
+    m_fsTransitioning = false;
+#endif
 }
 
 void MpvCore::toggleMinimize()
@@ -1324,6 +1346,7 @@ void MpvCore::toggleMiniMode()
     if (!m_renderWindow || m_miniTransitioning)
         return;
     m_miniTransitioning = true;
+#ifdef Q_OS_LINUX
     if (m_miniMode) {
         // Leave mini mode: back to a normal (tiled, not always-on-top) window.
         dispatchHypr({ "dispatch", "hl.dsp.window.pin(false)" });
@@ -1339,6 +1362,22 @@ void MpvCore::toggleMiniMode()
         applyWmResizeTo(320, 200);
         m_miniMode = true;
     }
+#else
+    // Off Linux there is no float+pin compositor dance: Qt's
+    // WindowStaysOnTopHint gives the same always-on-top mini window.
+    if (m_miniMode) {
+        m_renderWindow->setFlags(m_renderWindow->flags()
+                                 & ~Qt::WindowStaysOnTopHint);
+        m_renderWindow->resize(640, 400);
+        m_miniMode = false;
+    } else {
+        m_renderWindow->setFlags(m_renderWindow->flags()
+                                 | Qt::WindowStaysOnTopHint);
+        m_renderWindow->resize(320, 200);
+        m_miniMode = true;
+    }
+    m_miniTransitioning = false;
+#endif
 }
 
 // Hyprland's Lua config only accepts *relative* window resizes, so we read the
@@ -1347,6 +1386,7 @@ void MpvCore::toggleMiniMode()
 // process fails and the plain QWindow::resize() above is the effective path.
 void MpvCore::applyWmResizeTo(int targetW, int targetH)
 {
+#ifdef Q_OS_LINUX
     auto *p = new QProcess;
     p->setProcessChannelMode(QProcess::MergedChannels);
     QObject::connect(p, &QProcess::finished, this, [this, p, targetW, targetH] {
@@ -1365,6 +1405,12 @@ void MpvCore::applyWmResizeTo(int targetW, int targetH)
         m_miniTransitioning = false;
     });
     p->start("hyprctl", { "-j", "activewindow" });
+#else
+    // No compositor IPC: the resizes above already landed via QWindow.
+    Q_UNUSED(targetW);
+    Q_UNUSED(targetH);
+    m_miniTransitioning = false;
+#endif
 }
 
 void MpvCore::setupTray()

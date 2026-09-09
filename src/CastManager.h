@@ -16,6 +16,7 @@ class QNetworkAccessManager;
 class QProcess;
 class GoogleCastClient;
 class AirPlayPairing;
+class AirPlaySession;
 class HlsSession;
 
 // DLNA / UPnP AV + Google Cast + AirPlay casting — stream the currently
@@ -25,8 +26,9 @@ class HlsSession;
 //  * DLNA/UPnP AV — SSDP M-SEARCH + SOAP SetAVTransportURI/Play/Stop/Seek;
 //  * Google Cast — mDNS `_googlecast._tcp`, TLS CastV2 to port 8009,
 //    DefaultMediaReceiver LOAD with the local URL (see GoogleCastClient);
-//  * AirPlay (legacy video) — mDNS `_airplay._tcp`, POST /play plist with
-//    Content-Location = local URL, /rate /scrub /stop for control.
+//  * AirPlay 2 — mDNS `_airplay._tcp`, HAP PIN pairing (see
+//    AirPlayPairing), then verify + HAP-encrypted control channel with
+//    RTSP SETUP/RECORD and binary-plist /play (see AirPlaySession).
 //
 // Only local files can be cast — remote streams (Jellyfin/YouTube) already
 // live on a network another device may not reach, or are transient/DRM'd.
@@ -124,8 +126,6 @@ private:
     // Protocol dispatch for the unified device list.
     void castGoogle(int deviceIndex, double position);
     void castAirPlay(int deviceIndex, double position);
-    void airplayPost(const QVariantMap &dev, const QString &path,
-                     const QByteArray &body, const QString &contentType);
     void onGcastLoaded(bool ok);
     // Chromecast-safe conversion: probe + ffmpeg to a cached stereo MP4.
     // DLNA needs none of this (TVs play MKV/E-AC-3 fine) — only Cast/AirPlay.
@@ -139,8 +139,8 @@ private:
     // Live HLS (no full pre-transcode): start session, serve playlist.
     void startHls(int deviceIndex, const QString &path, double position);
     void stopHls();
-    // AirPlay gated playback: verify pairing, then POST /play on the same
-    // (verified) connection.
+    // AirPlay 2 playback: verify pairing, then SETUP/RECORD//play on
+    // the HAP-encrypted control channel (see AirPlaySession).
     void postAirPlayPlay(const QVariantMap &dev, double position);
 
     // SSDP: the M-SEARCH replies are read here (unicast back to our socket
@@ -202,6 +202,9 @@ private:
     double m_convertPos = 0.0;
     double m_convertProgress = 0.0;
     double m_convertDuration = 0.0; // seconds, progress base
+    // AirPlay 2 session (verify + encrypted control channel + RTSP /play).
+    // Replaces the legacy open-/play path LG-class TVs reject with 403.
+    class AirPlaySession *m_air = nullptr;
     // AirPlay pairing assistant + pending gated cast.
     class AirPlayPairing *m_pair = nullptr;
     bool m_airplayPairing = false;

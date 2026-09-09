@@ -1,16 +1,42 @@
 cmake_minimum_required(VERSION 3.28)
-project(omaplayer VERSION 0.2.8 LANGUAGES CXX)
+project(omaplayer VERSION 0.2.9 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Quick QuickControls2 DBus Widgets Network)
-find_package(PkgConfig REQUIRED)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Quick QuickControls2 Widgets Network)
+# D-Bus (MPRIS) exists only on Unix desktops — never on Windows/macOS.
+if(UNIX AND NOT APPLE)
+    find_package(Qt6 6.5 REQUIRED COMPONENTS DBus)
+endif()
+find_package(PkgConfig)
+if(NOT WIN32 AND NOT PkgConfig_FOUND)
+    message(FATAL_ERROR "pkg-config is required on this platform")
+endif()
 find_package(OpenSSL REQUIRED)
 # The libmpv client library (mpv render API + property/command API).
-pkg_check_modules(MPV REQUIRED IMPORTED_TARGET mpv)
+# Unix: system pkg-config. Windows (CI/vcpkg or mpv-winbuild): point
+# MPV_ROOT at a tree with include/mpv/client.h and the import library.
+if(WIN32)
+    find_path(MPV_INCLUDE_DIR NAMES mpv/client.h PATHS ENV MPV_ROOT
+              PATH_SUFFIXES include NO_DEFAULT_PATH)
+    find_library(MPV_LIBRARY NAMES mpv libmpv mpv-2
+                 PATHS ENV MPV_ROOT PATH_SUFFIXES lib NO_DEFAULT_PATH)
+    if(NOT MPV_INCLUDE_DIR OR NOT MPV_LIBRARY)
+        message(FATAL_ERROR "libmpv not found: set MPV_ROOT (include/mpv/client.h + lib)")
+    endif()
+else()
+    pkg_check_modules(MPV REQUIRED IMPORTED_TARGET mpv)
+endif()
 # libsodium (ed25519/X25519/ChaCha20-Poly1305 for AirPlay pairing).
-pkg_check_modules(SODIUM REQUIRED IMPORTED_TARGET libsodium)
+if(WIN32)
+    # vcpkg supplies an unofficial config package.
+    find_package(unofficial-sodium CONFIG REQUIRED)
+    set(SODIUM_TARGET unofficial::sodium::sodium)
+else()
+    pkg_check_modules(SODIUM REQUIRED IMPORTED_TARGET libsodium)
+    set(SODIUM_TARGET PkgConfig::SODIUM)
+endif()
 
 qt_standard_project_setup(REQUIRES 6.5)
 qt_policy(SET QTP0004 NEW)
@@ -21,18 +47,22 @@ qt_add_executable(omaplayer
     src/MpvCore.h
     src/MpvVideoItem.cpp
     src/MpvVideoItem.h
-    src/MprisPlayer.cpp
-    src/MprisPlayer.h
     src/Updater.cpp
     src/Updater.h
     src/JellyfinClient.cpp
     src/JellyfinClient.h
     src/CastManager.cpp
     src/CastManager.h
+    src/DirModel.cpp
+    src/DirModel.h
     src/GoogleCastClient.cpp
     src/GoogleCastClient.h
     src/AirPlayPairing.cpp
     src/AirPlayPairing.h
+    src/AirPlaySession.cpp
+    src/AirPlaySession.h
+    src/Bplist.cpp
+    src/Bplist.h
     src/HlsSession.cpp
     src/HlsSession.h
     src/SubtitleClient.cpp
@@ -47,6 +77,14 @@ qt_add_executable(omaplayer
     src/SeekThumbnails.h
 )
 
+# MPRIS lives on Linux desktops only (needs Qt D-Bus).
+if(UNIX AND NOT APPLE)
+    target_sources(omaplayer PRIVATE
+        src/MprisPlayer.cpp
+        src/MprisPlayer.h
+    )
+endif()
+
 set_source_files_properties(qml/Colors.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 
 qt_add_qml_module(omaplayer
@@ -59,6 +97,7 @@ qt_add_qml_module(omaplayer
         qml/Colors.qml
         qml/JellyfinPanel.qml
         qml/CastPanel.qml
+        qml/FileBrowser.qml
         qml/MetaOverlay.qml
         qml/Toast.qml
         qml/StatsOverlay.qml
@@ -79,11 +118,20 @@ target_link_libraries(omaplayer PRIVATE
     Qt6::QuickControls2
     Qt6::Widgets
     Qt6::Network
-    Qt6::DBus
-    PkgConfig::MPV
-    PkgConfig::SODIUM
+    ${SODIUM_TARGET}
     OpenSSL::Crypto
 )
+if(UNIX AND NOT APPLE)
+    target_link_libraries(omaplayer PRIVATE Qt6::DBus)
+endif()
+if(WIN32)
+    target_include_directories(omaplayer PRIVATE ${MPV_INCLUDE_DIR})
+    target_link_libraries(omaplayer PRIVATE ${MPV_LIBRARY})
+    # GUI subsystem (no console window); version/product metadata below.
+    set_target_properties(omaplayer PROPERTIES WIN32_EXECUTABLE TRUE)
+else()
+    target_link_libraries(omaplayer PRIVATE PkgConfig::MPV)
+endif()
 
 # --- Hungarian translation (pre-compiled .qm shipped in-tree) ---
 qt_add_resources(omaplayer "translations"

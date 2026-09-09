@@ -4,7 +4,9 @@
 #include <QQmlError>
 #include <QtQml>
 #include <QQuickWindow>
+#ifdef Q_OS_LINUX
 #include <QDBusConnection>
+#endif
 #include <QLocale>
 #include <QLibraryInfo>
 #include <QTranslator>
@@ -15,7 +17,9 @@
 #include <clocale>
 
 #include "MpvCore.h"
+#ifdef Q_OS_LINUX
 #include "MprisPlayer.h"
+#endif
 #include "JellyfinClient.h"
 #include "SubtitleClient.h"
 #include "MetadataInfo.h"
@@ -31,14 +35,9 @@ int main(int argc, char *argv[])
     // is honored earlier and avoids the crash, so set it before the
     // QGuiApplication is constructed.
     qputenv("QSG_RHI_BACKEND", "opengl");
-    // File dialogs must be the native GTK chooser: it is the only variant that
-    // truly multi-selects (QML FileDialog's Qt fallback is single-select), and
-    // group add depends on multi-select. The gtk3 QPA platform theme is not
-    // guaranteed to be exported by the desktop session (this app is often
-    // started from a launcher), so force it here. The theme package ships as
-    // part of qt6-base, so it is always available. The dialog takes ~0.6 s to
-    // appear (intrinsic GTK chooser construction) — accepted.
-    qputenv("QT_QPA_PLATFORMTHEME", "gtk3");
+    // No native dialogs remain (the file pickers are the in-window QML
+    // FileBrowser), so no QPA platform theme is forced — the app never
+    // touches GTK/the portal chooser.
 
     // fcitx5's QT_IM_MODULE=fcitx forces Qt TextFields into the DBus input
     // method plugin, which silently swallows the compositor's native keyboard
@@ -161,35 +160,40 @@ int main(int argc, char *argv[])
     }
 
 // --- MPRIS (org.mpris.MediaPlayer2) over session D-Bus — media keys,
-    // mixer strips and the desktop shell's media widget drive the player.
-    MpvCore::instance(); // ensure the singleton exists before adaptors attach
-    {
-        // A local (non-Jellyfin) file starting must close the Jellyfin session
-        // (see JellyfinClient::onFileOpened) — wired here, after the singleton
-        // exists, so the connect has a stable target.
-        QObject::connect(MpvCore::instance(), &MpvCore::filePathChanged,
-                         jellyfin, &JellyfinClient::onFileOpened);
-        // Server-side skip segments (intro/recap/outro) feed the same
-        // skip-button pipeline as chapters and local fingerprinting.
-        QObject::connect(jellyfin, &JellyfinClient::segmentsReady,
-                         MpvCore::instance(), &MpvCore::onJellyfinSegments);
-        QDBusConnection bus = QDBusConnection::sessionBus();
-        if (bus.isConnected()
-            && bus.registerService(QStringLiteral("org.mpris.MediaPlayer2.omaplayer"))) {
-            // The QDBusAbstractAdaptor pattern requires one "host" object that
-            // owns the adaptors; registering the host exports every adaptor on
-            // the same object path.
-            static QObject mprisHost;
-            static MprisRoot rootAdaptor(MpvCore::instance(), &mprisHost);
-            static MprisPlayer playerAdaptor(MpvCore::instance(), &mprisHost);
-            bus.registerObject(QStringLiteral("/org/mpris/MediaPlayer2"),
-                               &mprisHost,
-                               QDBusConnection::ExportAdaptors);
-        } else {
-            qInfo("MPRIS: session bus unavailable or name already taken — "
-                  "disabled (another player instance may be running)");
-        }
+// mixer strips and the desktop shell's media widget drive the player.
+// Linux-only: Qt's D-Bus module (and MPRIS itself) does not exist on
+// Windows/macOS; remote/media-key integration there needs SMTC /
+// MediaPlayer.framework instead (future work).
+MpvCore::instance(); // ensure the singleton exists before adaptors attach
+{
+    // A local (non-Jellyfin) file starting must close the Jellyfin session
+    // (see JellyfinClient::onFileOpened) — wired here, after the singleton
+    // exists, so the connect has a stable target.
+    QObject::connect(MpvCore::instance(), &MpvCore::filePathChanged,
+                     jellyfin, &JellyfinClient::onFileOpened);
+    // Server-side skip segments (intro/recap/outro) feed the same
+    // skip-button pipeline as chapters and local fingerprinting.
+    QObject::connect(jellyfin, &JellyfinClient::segmentsReady,
+                     MpvCore::instance(), &MpvCore::onJellyfinSegments);
+#ifdef Q_OS_LINUX
+    QDBusConnection bus = QDBusConnection::sessionBus();
+    if (bus.isConnected()
+        && bus.registerService(QStringLiteral("org.mpris.MediaPlayer2.omaplayer"))) {
+        // The QDBusAbstractAdaptor pattern requires one "host" object that
+        // owns the adaptors; registering the host exports every adaptor on
+        // the same object path.
+        static QObject mprisHost;
+        static MprisRoot rootAdaptor(MpvCore::instance(), &mprisHost);
+        static MprisPlayer playerAdaptor(MpvCore::instance(), &mprisHost);
+        bus.registerObject(QStringLiteral("/org/mpris/MediaPlayer2"),
+                           &mprisHost,
+                           QDBusConnection::ExportAdaptors);
+    } else {
+        qInfo("MPRIS: session bus unavailable or name already taken — "
+              "disabled (another player instance may be running)");
     }
+#endif
+}
 
     // IINA-style usage: `omaplayer <file-or-url>...` (options start with `--`
     // and must be skipped before picking the media path). The first file is

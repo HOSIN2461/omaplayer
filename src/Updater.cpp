@@ -119,8 +119,13 @@ void Updater::checkForUpdates()
         for (const QJsonValue &v : assets) {
             const QJsonObject a = v.toObject();
             const QString name = a.value(QLatin1String("name")).toString();
+#ifdef Q_OS_WIN
+            // Portable ZIP (omaplayer-win64.zip); installed beside the app.
+            if (name.endsWith(QLatin1String("-win64.zip"))) {
+#else
             if (name.contains(QLatin1String("x86_64"))
                 && name.endsWith(QLatin1String(".pkg.tar.zst"))) {
+#endif
                 m_assetName = name;
                 m_assetUrl = a.value(QLatin1String("browser_download_url"))
                                  .toString();
@@ -191,6 +196,7 @@ void Updater::installPackage()
         return;
 
     setBusy(true);
+#ifdef Q_OS_LINUX
     setStatus(QStringLiteral("Telepítés ~/.local könyvtárba…"));
 
     const QString cacheDir = QStandardPaths::writableLocation(
@@ -278,4 +284,12 @@ void Updater::installPackage()
     QProcess::startDetached(localBin + QStringLiteral("/omaplayer"), args);
     setStatus(QStringLiteral("Feltelepítve — újraindítás…"));
     QCoreApplication::exit(0);
+#else
+    // Windows portable: self-update from ZIP is not implemented yet —
+    // the user replaces the folder with the freshly downloaded release.
+    Q_UNUSED(m_downloadPath);
+    setStatus(QStringLiteral("Automatikus telepítés Windows alatt még nem "
+                             "támogatott — töltsd le az új ZIP-et."));
+    setBusy(false);
+#endif
 }

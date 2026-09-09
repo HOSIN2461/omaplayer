@@ -48,6 +48,7 @@ public:
     // Authenticate the channel with saved credentials (needed pre-/play).
     bool verify();
     bool hasPairing() const { return m_creds.isValid(); }
+    Credentials credentials() const { return m_creds; }
     void clearPairing();
     // Plain POST on the verified connection (QNAM pool shared with verify).
     struct MediaResult {

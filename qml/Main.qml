@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Dialogs
 import QtQuick.Layouts
 import Omaplayer
 import Omaplayer.Meta 1.0
@@ -356,9 +355,9 @@ ApplicationWindow {
                 flashAction(delta > 0 ? "\uF051" : "\uF048",
                             (delta > 0 ? "+" : "\u2212") + "10 mp")
             } else {
-                const newVol = Math.max(0, Math.min(150, mpv.volume + delta / 8))
+                const newVol = Math.round(Math.max(0, Math.min(150, mpv.volume + delta / 8)))
                 mpv.setVolume(newVol)
-                flashAction(volGlyph(newVol, mpv.muted), String(newVol) + " %")
+                flashAction(volGlyph(newVol, mpv.muted), newVol + " %")
             }
         }
 
@@ -1375,70 +1374,75 @@ ApplicationWindow {
     }
 
     // --- open media ------------------------------------------------------------
-    FileDialog {
+    FileBrowser {
         id: openDialog
-        title: qsTr("Média megnyitása")
-        fileMode: FileDialog.OpenFiles
+        titleText: qsTr("Média megnyitása")
+        fileMode: "openFiles"
+        acceptText: qsTr("Megnyitás")
         nameFilters: [
-            qsTr("Médiafájlok (%1)").arg("*.mp4 *.mkv *.webm *.avi *.mov *.flv *.m4v *.mp3 *.flac *.opus *.ogg *.wav"),
-            qsTr("Minden fájl (*)")
+            "*.mp4", "*.mkv", "*.webm", "*.avi", "*.mov", "*.flv", "*.m4v",
+            "*.mp3", "*.flac", "*.opus", "*.ogg", "*.wav"
         ]
-        onAccepted: mpv.openList(selectedFiles)
+        onAccepted: (paths) => mpv.openList(paths)
     }
 
     // --- add files to the playlist (does not disturb current playback) ------
-    FileDialog {
+    FileBrowser {
         id: addFilesDialog
-        title: qsTr("Fájlok hozzáadása a listához")
-        fileMode: FileDialog.OpenFiles
+        titleText: qsTr("Fájlok hozzáadása a listához")
+        fileMode: "openFiles"
+        acceptText: qsTr("Hozzáadás")
         nameFilters: [
-            qsTr("Médiafájlok (%1)").arg("*.mp4 *.mkv *.webm *.avi *.mov *.flv *.m4v *.mp3 *.flac *.opus *.ogg *.wav"),
-            qsTr("Minden fájl (*)")
+            "*.mp4", "*.mkv", "*.webm", "*.avi", "*.mov", "*.flv", "*.m4v",
+            "*.mp3", "*.flac", "*.opus", "*.ogg", "*.wav"
         ]
-        onAccepted: {
-            mpv.appendToPlaylist(selectedFiles)
+        onAccepted: (paths) => {
+            mpv.appendToPlaylist(paths)
             playlistPanel.refresh()
         }
     }
 
     // --- external audio / subtitle pickers -------------------------------
-    FileDialog {
+    FileBrowser {
         id: externalAudioDialog
-        title: qsTr("Külső hanglejátszás megnyitása")
-        fileMode: FileDialog.OpenFile
+        titleText: qsTr("Külső hanglejátszás megnyitása")
+        fileMode: "openFile"
+        acceptText: qsTr("Megnyitás")
         nameFilters: [
-            qsTr("Hangfájlok (%1)").arg("*.mp3 *.flac *.opus *.ogg *.wav *.aac *.m4a *.ac3"),
-            qsTr("Minden fájl (*)")
+            "*.mp3", "*.flac", "*.opus", "*.ogg", "*.wav", "*.aac", "*.m4a",
+            "*.ac3"
         ]
-        onAccepted: {
-            mpv.loadExternalAudio(selectedFile)
+        onAccepted: (paths) => {
+            mpv.loadExternalAudio(paths[0])
             toastHost.show(qsTr("Külső hang betöltve") + " — " + mpv.mediaTitle, "ok")
         }
     }
 
-    FileDialog {
+    FileBrowser {
         id: externalSubtitleDialog
-        title: qsTr("Külső felirat megnyitása")
-        fileMode: FileDialog.OpenFile
+        titleText: qsTr("Külső felirat megnyitása")
+        fileMode: "openFile"
+        acceptText: qsTr("Megnyitás")
         nameFilters: [
-            qsTr("Feliratok (%1)").arg("*.srt *.ass *.ssa *.vtt *.sub *.sup"),
-            qsTr("Minden fájl (*)")
+            "*.srt", "*.ass", "*.ssa", "*.vtt", "*.sub", "*.sup"
         ]
-        onAccepted: {
-            mpv.loadExternalSubtitle(selectedFile)
+        onAccepted: (paths) => {
+            mpv.loadExternalSubtitle(paths[0])
             settingsMenu.refreshSubTracks()
             toastHost.show(qsTr("Külső felirat betöltve"), "info")
         }
     }
 
     // --- save playlist to an m3u file ----------------------------------------
-    FileDialog {
+    FileBrowser {
         id: saveDialog
-        title: qsTr("Lejátszási lista mentése")
-        fileMode: FileDialog.SaveFile
-        nameFilters: [qsTr("M3U lejátszási lista (*.m3u)")]
-        onAccepted: {
-            mpv.savePlaylist(selectedFile)
+        titleText: qsTr("Lejátszási lista mentése")
+        fileMode: "saveFile"
+        acceptText: qsTr("Mentés")
+        defaultFileName: "playlist.m3u"
+        nameFilters: ["*.m3u"]
+        onAccepted: (paths) => {
+            mpv.savePlaylist(paths[0])
             toastHost.show(qsTr("Lejátszási lista mentve"), "ok")
         }
     }
@@ -3209,12 +3213,12 @@ ApplicationWindow {
         flashAction("\uF051", "+5 mp")
     } }
     Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.volumeUp; onActivated: {
-        const newVol = Math.min(mpv.volume + 10, 150)
+        const newVol = Math.min(Math.round(mpv.volume) + 5, 150)
         mpv.setVolume(newVol)
         flashAction(volGlyph(newVol, mpv.muted), newVol + " %")
     } }
     Shortcut { enabled: !root.keyRecorderActive; sequence: keyMgr.volumeDown; onActivated: {
-        const newVol = Math.max(mpv.volume - 10, 0)
+        const newVol = Math.max(Math.round(mpv.volume) - 5, 0)
         mpv.setVolume(newVol)
         flashAction(volGlyph(newVol, mpv.muted), newVol + " %")
     } }

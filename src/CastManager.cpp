@@ -1,6 +1,7 @@
 #include "CastManager.h"
 #include "GoogleCastClient.h"
 #include "AirPlayPairing.h"
+#include "AirPlaySession.h"
 #include "HlsSession.h"
 #include "CastDebug.h"
 
@@ -176,9 +177,11 @@ CastManager::CastManager(QObject *parent)
     , m_net(new QNetworkAccessManager(this))
     , m_gcast(new GoogleCastClient(this))
     , m_pair(new AirPlayPairing(this))
+    , m_air(new AirPlaySession(this))
     , m_hls(new HlsSession(this))
 {
     connect(m_pair, &AirPlayPairing::notice, this, &CastManager::notice);
+    connect(m_air, &AirPlaySession::notice, this, &CastManager::notice);
     connect(m_gcast, &GoogleCastClient::notice, this,
             &CastManager::notice);
     connect(m_gcast, &GoogleCastClient::loaded, this,
@@ -1393,104 +1396,28 @@ void CastManager::cancelAirPlayPair()
 
 void CastManager::postAirPlayPlay(const QVariantMap &dev, double position)
 {
-    // Legacy video protocol: POST /play with an XML plist. Start-Position is
-    // a 0..1 fraction; without duration we start at 0 then absolute-scrub.
-    // Runs on the verified channel (pairing's connection pool).
-    const QByteArray body =
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-        "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
-        "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
-        "<plist version=\"1.0\"><dict>"
-        "<key>Content-Location</key><string>" + m_castUrl.toUtf8() + "</string>"
-        "<key>Start-Position</key><real>0</real>"
-        "</dict></plist>";
+    // AirPlay 2 (pyatv AP2 flow): the legacy open /play is refused by
+    // AirPlay 2 receivers (403 / dropped connection), so playback goes
+    // through AirPlaySession — verify on a raw socket, HAP-encrypted
+    // control channel, RTSP SETUP/RECORD, binary-plist /play, /rate=1.
     const QString host = dev.value(QStringLiteral("host")).toString();
     const int port = dev.value(QStringLiteral("port")).toInt() ?: 7000;
-    castDebug(QStringLiteral("airplay> POST %1:%2/play len=%3 (verified)")
-                  .arg(host).arg(port).arg(body.size()));
-    auto res = m_pair->postMedia(QStringLiteral("/play"), body,
-                                 QStringLiteral("text/x-apple-plist+xml"));
-    castDebug(QStringLiteral("airplay< /play code=%1 err=%2")
-                  .arg(res.code).arg(res.error));
-    if (!res.ok && res.code == 403) {
-        Q_EMIT notice(
-            tr("AirPlay párosítást (PIN) kér — nem támogatott, "
-               "használd a Google Cast / DLNA sort"),
-            QStringLiteral("err"));
+    if (host.isEmpty()) {
         setActive(-1);
         return;
     }
-    Q_EMIT notice(
-        res.ok ? tr("Kivetítve: %1").arg(
-                     dev.value(QStringLiteral("name")).toString())
-               : tr("AirPlay indítás sikertelen (%1)").arg(res.error),
-        res.ok ? QStringLiteral("ok") : QStringLiteral("err"));
-    if (!res.ok) {
+    Q_EMIT notice(tr("AirPlay indítás: %1…").arg(
+                      dev.value(QStringLiteral("name")).toString()),
+                  "info");
+    m_air->setDevice(host, quint16(port), m_pair->credentials());
+    const bool ok = m_air->play(m_castUrl, position);
+    if (!ok) {
         setActive(-1); // never connected — must not offer "lekapcsolódás"
         return;
     }
-    if (res.ok && position > 2.0) {
-        // Absolute scrub once playback started; best-effort, ignored when
-        // the receiver does not support it.
-        QTimer::singleShot(1500, this, [this, position] {
-            if (m_activeDevice >= 0
-                && m_activeType == QLatin1String("airplay"))
-                castSeek(position);
-        });
-    }
-}
-
-void CastManager::airplayPost(const QVariantMap &dev, const QString &path,
-                              const QByteArray &body,
-                              const QString &contentType)
-{
-    const QString host = dev.value(QStringLiteral("host")).toString();
-    const int port = dev.value(QStringLiteral("port")).toInt() ?: 7000;
-    if (host.isEmpty())
-        return;
-    castDebug(QStringLiteral("airplay> POST %1:%2%3 len=%4")
-                  .arg(host).arg(port).arg(path).arg(body.size()));
-    QNetworkRequest req{QUrl(
-        QStringLiteral("http://%1:%2%3").arg(host).arg(port).arg(path))};
-    req.setHeader(QNetworkRequest::ContentTypeHeader, contentType);
-    req.setTransferTimeout(6000);
-    QNetworkReply *reply = body.isEmpty() ? m_net->post(req, QByteArray())
-                                          : m_net->post(req, body);
-    connect(reply, &QNetworkReply::finished, this,
-            [this, reply, path, dev] {
-                reply->deleteLater();
-                const int code = reply
-                                     ->attribute(QNetworkRequest::
-                                                     HttpStatusCodeAttribute)
-                                     .toInt();
-                const bool ok = reply->error() == QNetworkReply::NoError
-                    || code == 200 || code == 204;
-                castDebug(QStringLiteral("airplay< %1 code=%2 err=%3 body=%4")
-                              .arg(path)
-                              .arg(code)
-                              .arg(reply->errorString())
-                              .arg(QString::fromUtf8(reply->readAll()).left(200)));
-                if (path == QLatin1String("/play")) {
-                    if (!ok && code == 403) {
-                        // AirPlay 2 receivers demand PIN pairing + an
-                        // encrypted control channel (SRP/ed25519); the
-                        // legacy open /play is refused. Say so plainly.
-                        Q_EMIT notice(
-                            tr("AirPlay párosítást (PIN) kér — nem támogatott, "
-                               "használd a Google Cast / DLNA sort"),
-                            QStringLiteral("err"));
-                    } else {
-                        Q_EMIT notice(
-                            ok ? tr("Kivetítve: %1").arg(
-                                     dev.value(QStringLiteral("name")).toString())
-                               : tr("AirPlay indítás sikertelen (%1)")
-                                     .arg(reply->errorString()),
-                            ok ? QStringLiteral("ok") : QStringLiteral("err"));
-                    }
-                } else if (!ok) {
-                    qWarning() << "airplay:" << path << reply->errorString();
-                }
-            });
+    Q_EMIT notice(tr("Kivetítve: %1").arg(
+                      dev.value(QStringLiteral("name")).toString()),
+                  "ok");
 }
 
 void CastManager::onGcastLoaded(bool ok)
@@ -1549,9 +1476,9 @@ void CastManager::stopCast()
             m_gcast->stop();
             Q_EMIT notice(tr("Kivetítés leállítva"), "info");
         } else if (m_activeType == QLatin1String("airplay")) {
-            airplayPost(m_devices.at(dev).toMap(),
-                        QStringLiteral("/stop"), QByteArray(),
-                        QStringLiteral("application/octet-stream"));
+            // TEARDOWN on the AP2 session (non-blocking by design, safe
+            // straight from the QML handler).
+            m_air->stop();
             Q_EMIT notice(tr("Kivetítés leállítva"), "info");
         } else {
             soap(dev, QStringLiteral("Stop"), -1.0, nullptr);
@@ -1573,9 +1500,11 @@ void CastManager::resumeCast()
         return;
     }
     if (m_activeType == QLatin1String("airplay")) {
-        airplayPost(m_devices.at(dev).toMap(),
-                    QStringLiteral("/rate?value=1"), QByteArray(),
-                    QStringLiteral("application/octet-stream"));
+        // Blocking RTSP exchange — must not run inside the QML handler.
+        QTimer::singleShot(0, this, [this] {
+            if (m_air->isPlaying())
+                m_air->setRate(1.0);
+        });
         return;
     }
     soap(dev, QStringLiteral("SetAVTransportURI"), -1.0,
