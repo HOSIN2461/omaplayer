@@ -67,6 +67,8 @@ jobs:
 
       - name: libmpv (headers + import lib)
         shell: pwsh
+        env:
+          MPV_ROOT: ${{ github.workspace }}/mpv-pkg/root
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force mpv-pkg | Out-Null
@@ -140,6 +142,8 @@ jobs:
 
       - name: Deploy (windeployqt + bundle)
         shell: pwsh
+        env:
+          MPV_ROOT: ${{ github.workspace }}/mpv-pkg/root
         run: |
           $ErrorActionPreference = "Stop"
           $qtbin = Join-Path $env:QT_ROOT_DIR "bin"
