@@ -1,0 +1,165 @@
+name: CI
+
+# Windows-port branch while the port lands; widened to main afterwards.
+on:
+  push:
+    branches: [windows-port]
+  pull_request:
+    branches: [windows-port]
+  workflow_dispatch:
+
+jobs:
+  linux:
+    name: Linux (Ubuntu, Qt ${{ matrix.qt }})
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        qt: ["6.8.2"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ matrix.qt }}
+          cache: true
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config \
+            libmpv-dev libsodium-dev libssl-dev
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+  windows:
+    name: Windows (MSVC, Qt ${{ matrix.qt }})
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        qt: ["6.8.2"]
+    env:
+      VCPKG_DEFAULT_TRIPLET: x64-windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSVC (dumpbin/lib on PATH)
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ matrix.qt }}
+          arch: win64_msvc2022_64
+          cache: true
+
+      - name: vcpkg deps (OpenSSL, libsodium)
+        shell: pwsh
+        run: |
+          vcpkg install openssl libsodium --triplet x64-windows
+
+      - name: libmpv (headers + import lib)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force mpv-pkg | Out-Null
+          # Player build (mpv-2.dll); prefer a -dev asset when published.
+          $rel = Invoke-RestMethod https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest
+          $dev = $rel.assets | Where-Object { $_.name -match "mpv-dev.*x86_64.*\.7z$" } | Select-Object -First 1
+          $dll = $rel.assets | Where-Object { $_.name -match "^mpv-x86_64.*\.7z$" } | Select-Object -First 1
+          if ($dev) {
+            Invoke-WebRequest $dev.browser_download_url -OutFile mpv-pkg/mpv-dev.7z
+            7z x mpv-pkg/mpv-dev.7z -ompv-pkg/dev | Out-Null
+          } elseif ($dll) {
+            Invoke-WebRequest $dll.browser_download_url -OutFile mpv-pkg/mpv.7z
+            7z x mpv-pkg/mpv.7z -ompv-pkg/player | Out-Null
+            $mpvDll = Get-ChildItem -Recurse mpv-pkg/player -Filter mpv-2.dll | Select-Object -First 1
+            if (-not $mpvDll) { throw "mpv-2.dll not found in player package" }
+            dumpbin /exports $mpvDll.FullName | Out-File mpv-pkg/exports.txt
+            $names = Select-String "^\s+\d+\s+[0-9A-F]+\s+[0-9A-F]+\s+(\S+)" mpv-pkg/exports.txt |
+              ForEach-Object { $_.Matches.Groups[1].Value }
+            "LIBRARY mpv-2`nEXPORTS" | Out-File mpv-pkg/mpv.def -Encoding ascii
+            $names | Out-File mpv-pkg/mpv.def -Append -Encoding ascii
+            lib /def:mpv-pkg/mpv.def /machine:x64 /out:mpv-pkg/mpv.lib | Out-Null
+          } else {
+            throw "no mpv asset found in latest shinchiro release"
+          }
+          # Public headers from the mpv source release.
+          Invoke-WebRequest https://github.com/mpv-player/mpv/archive/refs/tags/v0.40.0.tar.gz -OutFile mpv-pkg/mpv-src.tar.gz
+          7z x mpv-pkg/mpv-src.tar.gz -ompv-pkg/src1 | Out-Null
+          7z x mpv-pkg/src1/mpv-src.tar -ompv-pkg/src | Out-Null
+          $hdr = Get-ChildItem -Recurse mpv-pkg/src -Filter client.h | Select-Object -First 1
+          if (-not $hdr) { throw "mpv headers not found in source release" }
+          New-Item -ItemType Directory -Force $env:MPV_ROOT/include/mpv, $env:MPV_ROOT/lib, $env:MPV_ROOT/bin | Out-Null
+          Copy-Item (Join-Path $hdr.Directory "client.h") $env:MPV_ROOT/include/mpv/
+          Copy-Item (Join-Path $hdr.Directory "render*.h") $env:MPV_ROOT/include/mpv/
+          Copy-Item (Join-Path $hdr.Directory "stream_cb.h") $env:MPV_ROOT/include/mpv/
+          if (Test-Path mpv-pkg/dev) {
+            Get-ChildItem -Recurse mpv-pkg/dev -Include *.lib | Select-Object -First 1 |
+              Copy-Item -Destination (Join-Path $env:MPV_ROOT "lib/mpv.lib")
+            Get-ChildItem -Recurse mpv-pkg/dev -Include mpv-2.dll | Select-Object -First 1 |
+              Copy-Item -Destination (Join-Path $env:MPV_ROOT "bin/mpv-2.dll")
+          } else {
+            Copy-Item mpv-pkg/mpv.lib (Join-Path $env:MPV_ROOT "lib/mpv.lib")
+            Copy-Item $mpvDll.FullName (Join-Path $env:MPV_ROOT "bin/mpv-2.dll")
+          }
+          Get-ChildItem $env:MPV_ROOT -Recurse | Select-Object FullName
+        env:
+          MPV_ROOT: ${{ github.workspace }}/mpv-pkg/root
+
+      - name: ffmpeg + ffprobe
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -OutFile ffmpeg.zip
+          7z x ffmpeg.zip -offmpeg-pkg | Out-Null
+          Get-ChildItem -Recurse ffmpeg-pkg -Filter ffmpeg.exe | Select-Object -First 1 |
+            Copy-Item -Destination ffmpeg.exe
+          Get-ChildItem -Recurse ffmpeg-pkg -Filter ffprobe.exe | Select-Object -First 1 |
+            Copy-Item -Destination ffprobe.exe
+
+      - name: Configure
+        shell: pwsh
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
+          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DMPV_ROOT="$env:MPV_ROOT"
+        env:
+          MPV_ROOT: ${{ github.workspace }}/mpv-pkg/root
+
+      - name: Build
+        run: cmake --build build --config Release -j
+
+      - name: Deploy (windeployqt + bundle)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $qtbin = Join-Path $env:QT_ROOT_DIR "bin"
+          & "$qtbin/windeployqt.exe" --release --compiler-runtime --qmldir qml build/Release/omaplayer.exe
+          New-Item -ItemType Directory -Force dist/omaplayer-win64 | Out-Null
+          Copy-Item build/Release/omaplayer.exe dist/omaplayer-win64/
+          Get-ChildItem build/Release -Filter *.dll | Copy-Item -Destination dist/omaplayer-win64/
+          Get-ChildItem build/Release -Directory | Copy-Item -Destination dist/omaplayer-win64/ -Recurse -Force
+          Copy-Item $env:MPV_ROOT/bin/mpv-2.dll dist/omaplayer-win64/
+          Copy-Item ffmpeg.exe, ffprobe.exe dist/omaplayer-win64/
+          $vcpkgBin = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin"
+          Copy-Item $vcpkgBin/libssl-*.dll, $vcpkgBin/libcrypto-*.dll, $vcpkgBin/libsodium.dll dist/omaplayer-win64/ -ErrorAction SilentlyContinue
+          Get-ChildItem dist/omaplayer-win64 | Select-Object Name
+
+      - name: Portable ZIP
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/omaplayer-win64 -DestinationPath omaplayer-win64.zip -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: omaplayer-win64
+          path: omaplayer-win64.zip
