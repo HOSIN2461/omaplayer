@@ -5,3 +5,4 @@ packaging/pkg/
 packaging/*.tar.gz
 packaging/*.pkg.tar.zst
 packaging/omaplayer/
+web/

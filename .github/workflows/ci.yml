@@ -72,27 +72,24 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force mpv-pkg | Out-Null
-          # Player build (mpv-2.dll); prefer a -dev asset when published.
+          # Player build (mpv-?.dll); a -dev asset is used only as fallback.
           $rel = Invoke-RestMethod https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest
-          $dev = $rel.assets | Where-Object { $_.name -match "mpv-dev.*x86_64.*\.7z$" } | Select-Object -First 1
           $dll = $rel.assets | Where-Object { $_.name -match "^mpv-x86_64.*\.7z$" } | Select-Object -First 1
-          if ($dev) {
-            Invoke-WebRequest $dev.browser_download_url -OutFile mpv-pkg/mpv-dev.7z
-            7z x mpv-pkg/mpv-dev.7z -ompv-pkg/dev | Out-Null
-          } elseif ($dll) {
-            Invoke-WebRequest $dll.browser_download_url -OutFile mpv-pkg/mpv.7z
-            7z x mpv-pkg/mpv.7z -ompv-pkg/player | Out-Null
-            $mpvDll = Get-ChildItem -Recurse mpv-pkg/player -Filter mpv-2.dll | Select-Object -First 1
-            if (-not $mpvDll) { throw "mpv-2.dll not found in player package" }
-            dumpbin /exports $mpvDll.FullName | Out-File mpv-pkg/exports.txt
-            $names = Select-String "^\s+\d+\s+[0-9A-F]+\s+[0-9A-F]+\s+(\S+)" mpv-pkg/exports.txt |
-              ForEach-Object { $_.Matches.Groups[1].Value }
-            "LIBRARY mpv-2`nEXPORTS" | Out-File mpv-pkg/mpv.def -Encoding ascii
-            $names | Out-File mpv-pkg/mpv.def -Append -Encoding ascii
-            lib /def:mpv-pkg/mpv.def /machine:x64 /out:mpv-pkg/mpv.lib | Out-Null
-          } else {
-            throw "no mpv asset found in latest shinchiro release"
-          }
+          if (-not $dll) { throw "no mpv player asset in latest shinchiro release" }
+          Invoke-WebRequest $dll.browser_download_url -OutFile mpv-pkg/mpv.7z
+          7z x mpv-pkg/mpv.7z -ompv-pkg/player | Out-Null
+          $mpvDll = Get-ChildItem -Recurse mpv-pkg/player -Filter mpv-?.dll | Select-Object -First 1
+          if (-not $mpvDll) { throw "no mpv-?.dll in player package" }
+          $dllBase = [System.IO.Path]::GetFileNameWithoutExtension($mpvDll.Name)
+          # MSVC import lib, always (re)built from the DLL exports.
+          dumpbin /exports $mpvDll.FullName | Out-File mpv-pkg/exports.txt
+          $names = Select-String "^\s+\d+\s+[0-9A-F]+\s+[0-9A-F]+\s+(\S+)" mpv-pkg/exports.txt |
+            ForEach-Object { $_.Matches.Groups[1].Value } |
+            Where-Object { $_ -notmatch "=" }
+          if (-not $names) { throw "no exports found in $($mpvDll.Name)" }
+          "LIBRARY $dllBase`nEXPORTS" | Out-File mpv-pkg/mpv.def -Encoding ascii
+          $names | Out-File mpv-pkg/mpv.def -Append -Encoding ascii
+          lib /def:mpv-pkg/mpv.def /machine:x64 /out:mpv-pkg/mpv.lib | Out-Null
           # Public headers from the mpv source release.
           Invoke-WebRequest https://github.com/mpv-player/mpv/archive/refs/tags/v0.40.0.tar.gz -OutFile mpv-pkg/mpv-src.tar.gz
           7z x mpv-pkg/mpv-src.tar.gz -ompv-pkg/src1 | Out-Null
@@ -103,14 +100,12 @@ jobs:
           Copy-Item (Join-Path $hdr.Directory "client.h") $env:MPV_ROOT/include/mpv/
           Copy-Item (Join-Path $hdr.Directory "render*.h") $env:MPV_ROOT/include/mpv/
           Copy-Item (Join-Path $hdr.Directory "stream_cb.h") $env:MPV_ROOT/include/mpv/
-          if (Test-Path mpv-pkg/dev) {
-            Get-ChildItem -Recurse mpv-pkg/dev -Include *.lib | Select-Object -First 1 |
-              Copy-Item -Destination (Join-Path $env:MPV_ROOT "lib/mpv.lib")
-            Get-ChildItem -Recurse mpv-pkg/dev -Include mpv-2.dll | Select-Object -First 1 |
-              Copy-Item -Destination (Join-Path $env:MPV_ROOT "bin/mpv-2.dll")
-          } else {
-            Copy-Item mpv-pkg/mpv.lib (Join-Path $env:MPV_ROOT "lib/mpv.lib")
-            Copy-Item $mpvDll.FullName (Join-Path $env:MPV_ROOT "bin/mpv-2.dll")
+          Copy-Item mpv-pkg/mpv.lib (Join-Path $env:MPV_ROOT "lib/mpv.lib")
+          Copy-Item $mpvDll.FullName (Join-Path $env:MPV_ROOT ("bin/" + $mpvDll.Name))
+          Set-Content mpv-pkg/dllname.txt $mpvDll.Name
+          # Verify every expected output exists.
+          foreach ($f in @("include/mpv/client.h", "include/mpv/render_gl.h", "lib/mpv.lib", "bin/" + $mpvDll.Name)) {
+            if (-not (Test-Path (Join-Path $env:MPV_ROOT $f))) { throw "missing output: $f" }
           }
           Get-ChildItem $env:MPV_ROOT -Recurse | Select-Object FullName
 
@@ -150,7 +145,7 @@ jobs:
           Copy-Item build/Release/omaplayer.exe dist/omaplayer-win64/
           Get-ChildItem build/Release -Filter *.dll | Copy-Item -Destination dist/omaplayer-win64/
           Get-ChildItem build/Release -Directory | Copy-Item -Destination dist/omaplayer-win64/ -Recurse -Force
-          Copy-Item $env:MPV_ROOT/bin/mpv-2.dll dist/omaplayer-win64/
+          Copy-Item $env:MPV_ROOT/bin/mpv-*.dll dist/omaplayer-win64/
           Copy-Item ffmpeg.exe, ffprobe.exe dist/omaplayer-win64/
           $vcpkgBin = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin"
           Copy-Item $vcpkgBin/libssl-*.dll, $vcpkgBin/libcrypto-*.dll, $vcpkgBin/libsodium.dll dist/omaplayer-win64/ -ErrorAction SilentlyContinue

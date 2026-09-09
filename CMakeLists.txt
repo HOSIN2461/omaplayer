@@ -181,7 +181,12 @@ qt_add_resources(omaplayer "audio_intro"
     FILES "${CMAKE_CURRENT_SOURCE_DIR}/res/audio-intro-helper.mjs"
 )
 
-install(TARGETS omaplayer RUNTIME DESTINATION bin)
-install(FILES LICENSE DESTINATION share/licenses/omaplayer)
-install(FILES packaging/omaplayer.desktop DESTINATION share/applications)
-install(FILES packaging/omaplayer.svg DESTINATION share/icons/hicolor/scalable/apps)
+if(APPLE)
+    # App bundle (macdeployqt runs in CI on top of the build tree).
+    install(TARGETS omaplayer BUNDLE DESTINATION .)
+elseif(UNIX)
+    install(TARGETS omaplayer RUNTIME DESTINATION bin)
+    install(FILES LICENSE DESTINATION share/licenses/omaplayer)
+    install(FILES packaging/omaplayer.desktop DESTINATION share/applications)
+    install(FILES packaging/omaplayer.svg DESTINATION share/icons/hicolor/scalable/apps)
+endif()
