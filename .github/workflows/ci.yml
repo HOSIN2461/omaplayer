@@ -72,37 +72,34 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force mpv-pkg | Out-Null
-          # Player build (mpv-?.dll); a -dev asset is used only as fallback.
+          # -dev package: headers + libmpv-2.dll (the .dll.a inside is MinGW
+          # format, unusable by MSVC — the import lib is rebuilt below).
+          # x86_64 WITHOUT -v3 (runs on every 64-bit PC).
           $rel = Invoke-RestMethod https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest
-          $dll = $rel.assets | Where-Object { $_.name -match "^mpv-x86_64.*\.7z$" } | Select-Object -First 1
-          if (-not $dll) { throw "no mpv player asset in latest shinchiro release" }
-          Invoke-WebRequest $dll.browser_download_url -OutFile mpv-pkg/mpv.7z
-          7z x mpv-pkg/mpv.7z -ompv-pkg/player | Out-Null
-          $mpvDll = Get-ChildItem -Recurse mpv-pkg/player -Filter mpv-?.dll | Select-Object -First 1
-          if (-not $mpvDll) { throw "no mpv-?.dll in player package" }
-          $dllBase = [System.IO.Path]::GetFileNameWithoutExtension($mpvDll.Name)
+          $dev = $rel.assets | Where-Object { $_.name -match "^mpv-dev-x86_64-[0-9].*\.7z$" } | Select-Object -First 1
+          if (-not $dev) { throw "no mpv-dev x86_64 asset in latest shinchiro release" }
+          Invoke-WebRequest $dev.browser_download_url -OutFile mpv-pkg/mpv-dev.7z
+          7z x mpv-pkg/mpv-dev.7z -ompv-pkg/dev | Out-Null
+          $hdr = Get-ChildItem -Recurse mpv-pkg/dev -Filter client.h | Select-Object -First 1
+          if (-not $hdr) { throw "mpv headers not found in dev package" }
+          $mpvDll = Get-ChildItem -Recurse mpv-pkg/dev -Filter mpv-?.dll | Select-Object -First 1
+          if (-not $mpvDll) { throw "no mpv-?.dll in dev package" }
           # MSVC import lib, always (re)built from the DLL exports.
           dumpbin /exports $mpvDll.FullName | Out-File mpv-pkg/exports.txt
           $names = Select-String "^\s+\d+\s+[0-9A-F]+\s+[0-9A-F]+\s+(\S+)" mpv-pkg/exports.txt |
             ForEach-Object { $_.Matches.Groups[1].Value } |
             Where-Object { $_ -notmatch "=" }
           if (-not $names) { throw "no exports found in $($mpvDll.Name)" }
+          $dllBase = [System.IO.Path]::GetFileNameWithoutExtension($mpvDll.Name)
           "LIBRARY $dllBase`nEXPORTS" | Out-File mpv-pkg/mpv.def -Encoding ascii
           $names | Out-File mpv-pkg/mpv.def -Append -Encoding ascii
           lib /def:mpv-pkg/mpv.def /machine:x64 /out:mpv-pkg/mpv.lib | Out-Null
-          # Public headers from the mpv source release.
-          Invoke-WebRequest https://github.com/mpv-player/mpv/archive/refs/tags/v0.40.0.tar.gz -OutFile mpv-pkg/mpv-src.tar.gz
-          7z x mpv-pkg/mpv-src.tar.gz -ompv-pkg/src1 | Out-Null
-          7z x mpv-pkg/src1/mpv-src.tar -ompv-pkg/src | Out-Null
-          $hdr = Get-ChildItem -Recurse mpv-pkg/src -Filter client.h | Select-Object -First 1
-          if (-not $hdr) { throw "mpv headers not found in source release" }
           New-Item -ItemType Directory -Force $env:MPV_ROOT/include/mpv, $env:MPV_ROOT/lib, $env:MPV_ROOT/bin | Out-Null
           Copy-Item (Join-Path $hdr.Directory "client.h") $env:MPV_ROOT/include/mpv/
           Copy-Item (Join-Path $hdr.Directory "render*.h") $env:MPV_ROOT/include/mpv/
           Copy-Item (Join-Path $hdr.Directory "stream_cb.h") $env:MPV_ROOT/include/mpv/
           Copy-Item mpv-pkg/mpv.lib (Join-Path $env:MPV_ROOT "lib/mpv.lib")
           Copy-Item $mpvDll.FullName (Join-Path $env:MPV_ROOT ("bin/" + $mpvDll.Name))
-          Set-Content mpv-pkg/dllname.txt $mpvDll.Name
           # Verify every expected output exists.
           foreach ($f in @("include/mpv/client.h", "include/mpv/render_gl.h", "lib/mpv.lib", "bin/" + $mpvDll.Name)) {
             if (-not (Test-Path (Join-Path $env:MPV_ROOT $f))) { throw "missing output: $f" }
