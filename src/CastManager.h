@@ -67,6 +67,10 @@ public:
     // is fatal to the QML engine (SIGABRT in QQmlData/~QObject).
     Q_INVOKABLE void requestCast(int deviceIndex, const QString &filePath,
                                  double position = 0.0);
+    // Mirror-probe entry for QML (AirPlay rows): deferred like requestCast,
+    // then runs the DoubleTake-style handshake probe on the next event-loop
+    // turn. No file needed — diagnostics only (verify → SETUP → dataPort).
+    Q_INVOKABLE void requestMirrorProbe(int deviceIndex);
 
     // Cast `filePath` to the renderer at `deviceIndex`, optionally seeking to
     // `position` seconds right after Play. Emits `notice` on failure.
@@ -142,6 +146,9 @@ private:
     // AirPlay 2 playback: verify pairing, then SETUP/RECORD//play on
     // the HAP-encrypted control channel (see AirPlaySession).
     void postAirPlayPlay(const QVariantMap &dev, double position);
+    // Mirror handshake probe (DoubleTake-style negotiation, diagnostics
+    // only — needs an existing pairing, see requestMirrorProbe).
+    void probeMirror(int deviceIndex);
 
     // SSDP: the M-SEARCH replies are read here (unicast back to our socket
     // and multicast announcements) and their LOCATION headers collected.

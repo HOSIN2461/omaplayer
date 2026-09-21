@@ -342,6 +342,35 @@ Item {
                                 }
                             }
 
+                            // Mirror-probe pill for AirPlay rows (diagnostics:
+                            // DoubleTake-style handshake, no file needed).
+                            // Click keeps the panel open (result = toast).
+                            Rectangle {
+                                Layout.alignment: Qt.AlignVCenter
+                                Layout.preferredWidth: 62
+                                Layout.preferredHeight: 26
+                                radius: 13
+                                visible: modelData.type === "airplay"
+                                          && modelData.name !== manager.activeDeviceName
+                                color: probeMouse.containsMouse || probeMouse.pressed
+                                       ? Colors.accentGlow : "transparent"
+                                border.color: Colors.accent
+                                border.width: 1
+                                Behavior on color { ColorAnimation { duration: 110 } }
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: qsTr("próba")
+                                    font.pixelSize: 11
+                                    color: Colors.accent
+                                }
+                                MouseArea {
+                                    id: probeMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    onClicked: manager.requestMirrorProbe(index)
+                                    cursorShape: Qt.PointingHandCursor
+                                }
+                            }
                             // Pill button in the house style (cf. the "Kihagyás"
                             // button): solid accent for "kapcsolódás",
                             // outlined for the active "lekapcsolódás" state.

@@ -853,6 +853,45 @@ void CastManager::requestCast(int deviceIndex, const QString &filePath,
     });
 }
 
+void CastManager::requestMirrorProbe(int deviceIndex)
+{
+    // Same reentrancy rule as requestCast/finishAirPlayPair: the blocking
+    // handshake must not run inside the QML click handler's JS evaluation.
+    QTimer::singleShot(0, this, [this, deviceIndex] {
+        probeMirror(deviceIndex);
+    });
+}
+
+void CastManager::probeMirror(int deviceIndex)
+{
+    if (deviceIndex < 0 || deviceIndex >= m_devices.size()) {
+        Q_EMIT notice(tr("Először keress eszközt a hálózaton"), "err");
+        return;
+    }
+    QVariantMap dev = m_devices.at(deviceIndex).toMap();
+    if (deviceType(deviceIndex) != QLatin1String("airplay")) {
+        Q_EMIT notice(tr("Mirror-próba csak AirPlay eszközön"), "err");
+        return;
+    }
+    const QString host = dev.value(QStringLiteral("host")).toString();
+    const int port = dev.value(QStringLiteral("port")).toInt() ?: 7000;
+    if (host.isEmpty()) {
+        Q_EMIT notice(tr("AirPlay eszköz címe hiányzik"), "err");
+        return;
+    }
+    m_pair->setDevice(host, quint16(port),
+                      dev.value(QStringLiteral("id")).toString());
+    if (!m_pair->hasPairing() || !m_pair->verify()) {
+        Q_EMIT notice(tr("Előbb párosíts PIN-nel (kapcsolódás gomb)"), "err");
+        return;
+    }
+    Q_EMIT notice(tr("Mirror-próba: %1…").arg(
+                      dev.value(QStringLiteral("name")).toString()),
+                  "info");
+    m_air->setDevice(host, quint16(port), m_pair->credentials());
+    m_air->mirrorProbe(); // notice() carries the per-step result codes
+}
+
 QString CastManager::deviceKey(const QVariantMap &dev)
 {    return dev.value(QStringLiteral("type")).toString()
         + QLatin1Char('\x1f') + dev.value(QStringLiteral("host")).toString()

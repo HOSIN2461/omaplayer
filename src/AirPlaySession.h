@@ -41,9 +41,13 @@ public:
     // Full connect+verify+setup+play flow. True when the TV accepted /play
     // and playback-info shows no error.
     bool play(const QString &url, double position);
-    // Mirror-handshake probe (grows into file-push playback): verify →
-    // fp-setup → mirror SETUP#1 → RECORD → SETUP#2 video stream. Logs every
-    // step; no RTP yet. Diagnostic scaffolding for LG V2-only TVs.
+    // Mirror-handshake probe (DoubleTake-compatible negotiation): verify →
+    // GET /info (features/sourceVersion) → control-first SETUP
+    // (combinedGetInfo); on explicit protocol rejection (400/405/406/415/
+    // 455/501) exactly one fallback to legacy media-first (audio SETUP, then
+    // video SETUP, RECORD last). Logs every step; no RTP yet. Diagnostic
+    // scaffolding for LG V2-only TVs (which reject the control shape and
+    // need PTP + controlPort audio + descriptor shk/shiv, no /fp-setup).
     bool mirrorProbe();
     // Best-effort playback rate (resume uses 1.0).
     void setRate(double rate);
@@ -113,6 +117,21 @@ private:
     void postFeedback();
     void closeAll();
 
+    // --- mirror negotiation helpers (DoubleTake policy, probe-only) --------
+    // True for the explicit protocol rejections that justify exactly one
+    // transition from control-first to legacy media-first ordering.
+    static bool setupOrderRejected(int code);
+    // PTP needs: encrypted session + feature 41 + SourceVersion >= 354.54.6,
+    // except the narrow 377.40.x interop exception (advertises PTP, speaks NTP).
+    static bool versionSupportsPTP(const QString &sourceVersion);
+    static QByteArray randomBytes(int n);
+    // Session-level plist shared by control + legacy media-first SETUPs.
+    QVariantMap mirrorSessionPlist(const QString &sessionUuid,
+                                   const QString &sourceVersion,
+                                   const QString &timingProtocol,
+                                   int timingPort,
+                                   const QString &timingPeerId) const;
+
     QString m_host;
     quint16 m_port = 7000;
     AirPlayPairing::Credentials m_creds;
@@ -137,6 +156,9 @@ private:
     quint32 m_sessionId = 0;
     QString m_localIp;
     QString m_playUuid;
+    // Mirror sessions address streams by streamConnectionID, not by the
+    // local-ip/sessionId URI the URL-flow uses — TEARDOWN follows them here.
+    QString m_teardownUri;
 
     bool m_playing = false;
 };
