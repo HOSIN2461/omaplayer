@@ -113,6 +113,40 @@ Item {
             }
         }
 
+        // --- active DoubleTake mirror info ----------------------------------
+        Rectangle {
+            Layout.fillWidth: true
+            visible: manager.dtStreaming
+            height: 34
+            radius: 8
+            color: "#16ffffff"
+            border.color: Colors.accent
+            border.width: 1
+
+            Row {
+                anchors.fill: parent
+                anchors.leftMargin: 10
+                anchors.rightMargin: 10
+                spacing: 6
+
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "\uF065"                     // FA expand (mirror)
+                    font.family: "Font Awesome 7 Free Solid"
+                    font.pixelSize: 12
+                    color: Colors.accent
+                }
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: qsTr("Tükrözés: %1%2").arg(manager.dtHost)
+                          .arg(manager.dtMuted ? qsTr(" (némítva)") : "")
+                    font.pixelSize: 12
+                    color: Colors.overlayText
+                    elide: Text.ElideRight
+                }
+            }
+        }
+
         // --- preparing (transcoding) card ----------------------------------
         // While ffmpeg converts for Cast/AirPlay nothing streams yet — show
         // the target + a real progress bar + cancel, so the state is clear.
@@ -200,12 +234,13 @@ Item {
             }
         }
 
-        // --- AirPlay PIN row ------------------------------------------------
+        // --- AirPlay / DoubleTake PIN row ------------------------------------
         // The TV shows a PIN (pair-pin-start); typing it here finishes HAP
-        // pairing, then playback starts automatically.
+        // pairing (native) or DoubleTake pairing (dtPairing), then the
+        // pending playback / mirror starts automatically.
         Rectangle {
             Layout.fillWidth: true
-            visible: manager.airplayPairing
+            visible: manager.airplayPairing || manager.dtPairing
             height: 64
             radius: 8
             color: "#16ffffff"
@@ -224,7 +259,9 @@ Item {
 
                 Text {
                     Layout.fillWidth: true
-                    text: qsTr("PIN a tévé képernyőjéről:")
+                    text: manager.dtPairing
+                          ? qsTr("PIN a tévé képernyőjéről (tükrözés):")
+                          : qsTr("PIN a tévé képernyőjéről:")
                     font.pixelSize: 12
                     color: Colors.overlayText
                 }
@@ -241,7 +278,9 @@ Item {
                             regularExpression: /[0-9]{0,8}/
                         }
                         font.pixelSize: 13
-                        onAccepted: manager.finishAirPlayPair(text)
+                        onAccepted: manager.dtPairing
+                                    ? manager.submitDtPin(text)
+                                    : manager.finishAirPlayPair(text)
                     }
                     Rectangle {
                         Layout.preferredWidth: 52
@@ -257,7 +296,9 @@ Item {
                         }
                         MouseArea {
                             anchors.fill: parent
-                            onClicked: manager.finishAirPlayPair(pinField.text)
+                            onClicked: manager.dtPairing
+                                       ? manager.submitDtPin(pinField.text)
+                                       : manager.finishAirPlayPair(pinField.text)
                             cursorShape: Qt.PointingHandCursor
                         }
                     }
@@ -306,6 +347,10 @@ Item {
                             anchors.leftMargin: 10
                             anchors.rightMargin: 10
                             spacing: 8
+                            // Above the row-wide devMouse below: z only
+                            // orders siblings, so the whole row content must
+                            // sit above it or no pill gets clicks.
+                            z: 1
 
                             Rectangle {
                                 width: 30; height: 30; radius: 8
@@ -342,32 +387,92 @@ Item {
                                 }
                             }
 
-                            // Mirror-probe pill for AirPlay rows (diagnostics:
-                            // DoubleTake-style handshake, no file needed).
-                            // Click keeps the panel open (result = toast).
+                            // Screen-mirror pill (DoubleTake backend):
+                            // streams the desktop to AirPlay TVs where the
+                            // native URL-flow cannot work (LG: /play → 404).
+                            // Click keeps the panel open (PIN may be needed).
+                            Rectangle {
+                                Layout.alignment: Qt.AlignVCenter
+                                Layout.preferredWidth: 76
+                                Layout.preferredHeight: 26
+                                radius: 13
+                                visible: modelData.type === "airplay"
+                                          && manager.dtAvailable
+                                          && !(manager.dtStreaming
+                                               && modelData.host === manager.dtHost)
+                                color: mirrorMouse.containsMouse || mirrorMouse.pressed
+                                       ? Colors.accentGlow : Colors.accent
+                                Behavior on color { ColorAnimation { duration: 110 } }
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: qsTr("tükrözés")
+                                    font.pixelSize: 11
+                                    font.weight: Font.DemiBold
+                                    color: "#0b0b0e"
+                                }
+                                MouseArea {
+                                    id: mirrorMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    // Above the row-wide devMouse (see probe).
+                                    z: 2
+                                    onClicked: manager.requestDtMirror(index)
+                                    cursorShape: Qt.PointingHandCursor
+                                }
+                            }
+                            // Active-mirror pills for the mirrored host:
+                            // stop + mute toggle (mirror starts muted).
+                            Rectangle {
+                                Layout.alignment: Qt.AlignVCenter
+                                Layout.preferredWidth: 76
+                                Layout.preferredHeight: 26
+                                radius: 13
+                                visible: modelData.type === "airplay"
+                                          && manager.dtStreaming
+                                          && modelData.host === manager.dtHost
+                                color: "transparent"
+                                border.color: Colors.accent
+                                border.width: 1
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: qsTr("leállítás")
+                                    font.pixelSize: 11
+                                    font.weight: Font.DemiBold
+                                    color: Colors.accent
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    // Above the row-wide devMouse (see probe).
+                                    z: 2
+                                    onClicked: manager.stopDtMirror()
+                                    cursorShape: Qt.PointingHandCursor
+                                }
+                            }
                             Rectangle {
                                 Layout.alignment: Qt.AlignVCenter
                                 Layout.preferredWidth: 62
                                 Layout.preferredHeight: 26
                                 radius: 13
                                 visible: modelData.type === "airplay"
-                                          && modelData.name !== manager.activeDeviceName
-                                color: probeMouse.containsMouse || probeMouse.pressed
+                                          && manager.dtStreaming
+                                          && modelData.host === manager.dtHost
+                                color: muteMouse.containsMouse || muteMouse.pressed
                                        ? Colors.accentGlow : "transparent"
                                 border.color: Colors.accent
                                 border.width: 1
-                                Behavior on color { ColorAnimation { duration: 110 } }
                                 Text {
                                     anchors.centerIn: parent
-                                    text: qsTr("próba")
+                                    text: manager.dtMuted ? qsTr("némítva") : qsTr("hang")
                                     font.pixelSize: 11
                                     color: Colors.accent
                                 }
                                 MouseArea {
-                                    id: probeMouse
+                                    id: muteMouse
                                     anchors.fill: parent
                                     hoverEnabled: true
-                                    onClicked: manager.requestMirrorProbe(index)
+                                    // Above the row-wide devMouse (see probe).
+                                    z: 2
+                                    onClicked: manager.toggleDtMute()
                                     cursorShape: Qt.PointingHandCursor
                                 }
                             }

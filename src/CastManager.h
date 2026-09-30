@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QJsonObject>
 #include <QString>
 #include <QStringList>
 #include <QVariantList>
@@ -106,6 +107,29 @@ public:
     Q_INVOKABLE void finishAirPlayPair(const QString &pin);
     Q_INVOKABLE void cancelAirPlayPair();
     void finishAirPlayPairNow(const QString &pin);
+    // Screen mirroring via the DoubleTake backend (external `doubletake`
+    // sender, AUR `doubletake-bin`). Proven against LG webOS AirPlay where
+    // the native URL-flow (/play → 404) and the native mirror handshake
+    // (stream SETUP stall) both fail. The daemon pairs once (PIN row is
+    // shared), then streams the desktop; audio starts MUTED (09-22 lesson).
+    Q_PROPERTY(bool dtAvailable READ dtAvailable NOTIFY dtStateChanged)
+    Q_PROPERTY(QString dtState READ dtState NOTIFY dtStateChanged)
+    Q_PROPERTY(bool dtPairing READ dtPairing NOTIFY dtStateChanged)
+    Q_PROPERTY(bool dtStreaming READ dtStreaming NOTIFY dtStateChanged)
+    Q_PROPERTY(bool dtMuted READ dtMuted NOTIFY dtStateChanged)
+    Q_PROPERTY(QString dtHost READ dtHost NOTIFY dtStateChanged)
+    bool dtAvailable() const { return m_dtAvailable; }
+    QString dtState() const { return m_dtState; }
+    bool dtPairing() const { return m_dtState == QLatin1String("pin_required"); }
+    bool dtStreaming() const { return m_dtState == QLatin1String("streaming"); }
+    bool dtMuted() const { return m_dtMuted; }
+    QString dtHost() const { return m_dtHost; }
+    Q_INVOKABLE void requestDtMirror(int deviceIndex);
+    Q_INVOKABLE void submitDtPin(const QString &pin);
+    Q_INVOKABLE void stopDtMirror();
+    Q_INVOKABLE void toggleDtMute();
+signals:
+    void dtStateChanged();
 signals:
     void convertingChanged();
     void convertProgressChanged();
@@ -149,6 +173,13 @@ private:
     // Mirror handshake probe (DoubleTake-style negotiation, diagnostics
     // only — needs an existing pairing, see requestMirrorProbe).
     void probeMirror(int deviceIndex);
+    // DoubleTake backend internals (see requestDtMirror). All ctl calls are
+    // short blocking QProcess runs; entries are deferred past QML handlers.
+    QJsonObject dtCtl(const QStringList &args, int timeoutMs = 15000);
+    bool ensureDtDaemon();
+    void dtStart(const QString &host);
+    void pollDt();
+    void dtSetState(const QString &state);
 
     // SSDP: the M-SEARCH replies are read here (unicast back to our socket
     // and multicast announcements) and their LOCATION headers collected.
@@ -224,4 +255,11 @@ private:
     QString m_hlsKey;        // stable id of the HLS target
     QString m_hlsSrc;
     double m_hlsPos = 0.0;
+    // DoubleTake mirror backend state (external sender process).
+    bool m_dtAvailable = false; // doubletake + doubletake-ctl on PATH
+    QString m_dtState = QStringLiteral("idle"); // idle|connecting|pin_required|streaming
+    QString m_dtHost;                           // mirror target in flight
+    bool m_dtMuted = false;
+    bool m_dtMuteSent = false; // mute pushed right after streaming starts
+    QTimer *m_dtTimer = nullptr; // 2 s status poll while busy/streaming
 };

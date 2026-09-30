@@ -14,7 +14,8 @@ url="https://github.com/HOSIN2461/omaplayer"
 license=('MIT')
 install="$pkgname.install"
 depends=('qt6-base' 'qt6-declarative' 'qt6-wayland' 'mpv' 'hicolor-icon-theme')
-optdepends=('yt-dlp: webes (YouTube) források lejátszása')
+optdepends=('yt-dlp: webes (YouTube) források lejátszása'
+            'doubletake: képernyőtükrözés AirPlay TV-kre (LG webOS is)')
 makedepends=('cmake' 'ninja' 'git')
 source=("$pkgname::git+https://github.com/HOSIN2461/omaplayer.git#tag=v$pkgver")
 sha256sums=('SKIP')

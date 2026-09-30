@@ -49,6 +49,9 @@ public:
     // scaffolding for LG V2-only TVs (which reject the control shape and
     // need PTP + controlPort audio + descriptor shk/shiv, no /fp-setup).
     bool mirrorProbe();
+    // iPhone-replica probe (MIRROR_IPHONE=1): byte-level copy of the
+    // captured iPhone16,2 → UxPlay mirror flow. See .cpp for details.
+    bool mirrorProbeIphone();
     // Best-effort playback rate (resume uses 1.0).
     void setRate(double rate);
     // TEARDOWN + close everything.

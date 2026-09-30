@@ -20,6 +20,7 @@
 #include <QStandardPaths>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QThread>
 #include <QTimer>
 #include <QUdpSocket>
 #include <QUrl>
@@ -187,6 +188,16 @@ CastManager::CastManager(QObject *parent)
             &CastManager::notice);
     connect(m_gcast, &GoogleCastClient::loaded, this,
             &CastManager::onGcastLoaded);
+    // DoubleTake backend: external sender binaries double as feature probe.
+    m_dtAvailable = !QStandardPaths::findExecutable(
+                            QStringLiteral("doubletake"))
+                         .isEmpty()
+            && !QStandardPaths::findExecutable(
+                       QStringLiteral("doubletake-ctl"))
+                    .isEmpty();
+    m_dtTimer = new QTimer(this);
+    m_dtTimer->setInterval(2000);
+    connect(m_dtTimer, &QTimer::timeout, this, [this] { pollDt(); });
     m_discoverTimer = new QTimer(this);
     m_discoverTimer->setSingleShot(true);
     m_discoverTimer->setInterval(kDiscoveryMs);
@@ -1697,4 +1708,207 @@ QString CastManager::localIp() const
         }
     }
     return QStringLiteral("127.0.0.1");
+}
+// --- DoubleTake screen-mirror backend --------------------------------------
+// External `doubletake` sender (AUR doubletake-bin): the only sender proven
+// against LG webOS AirPlay (09-22: PIN + media-first + NTP + ChaCha stream).
+// omaplayer drives its daemon over `doubletake-ctl` JSON; the CastPanel PIN
+// row is shared. Audio is muted the moment streaming starts (09-22 lesson:
+// the receiver came up at full blast).
+
+QJsonObject CastManager::dtCtl(const QStringList &args, int timeoutMs)
+{
+    QJsonObject empty;
+    if (!m_dtAvailable)
+        return empty;
+    QProcess p;
+    p.start(QStringLiteral("doubletake-ctl"), args);
+    if (!p.waitForFinished(timeoutMs)) {
+        p.kill();
+        return empty;
+    }
+    if (p.exitCode() != 0)
+        return empty;
+    const QJsonDocument doc =
+        QJsonDocument::fromJson(p.readAllStandardOutput());
+    if (!doc.isObject())
+        return empty;
+    return doc.object();
+}
+
+bool CastManager::ensureDtDaemon()
+{
+    if (!m_dtAvailable)
+        return false;
+    if (dtCtl({QStringLiteral("status")}, 5000).value(QStringLiteral("ok")).toBool())
+        return true;
+    // No daemon on the socket — start ours (detached, survives our exit).
+    // The LG only renders AAC-ELD mirror audio (ALAC arrives but stays
+    // silent) and our doubletake build carries the FDK ELD encoder, so
+    // force it here — a stock AUR doubletake would ignore this and the
+    // TV would stay mute (see STATUS 09-22).
+    qputenv("DOUBLETAKE_AUDIO_CODEC", "eld");
+    QStringList args{QStringLiteral("-daemonize")};
+    if (qgetenv("OMAPLAYER_DT_DEBUG") == "1")
+        args << QStringLiteral("-debug");
+    if (!QProcess::startDetached(QStringLiteral("doubletake"), args))
+        return false;
+    for (int i = 0; i < 10; ++i) {
+        QThread::msleep(500);
+        if (dtCtl({QStringLiteral("status")}, 5000)
+                .value(QStringLiteral("ok"))
+                .toBool())
+            return true;
+    }
+    return false;
+}
+
+void CastManager::dtSetState(const QString &state)
+{
+    if (m_dtState == state)
+        return;
+    m_dtState = state;
+    Q_EMIT dtStateChanged();
+}
+
+void CastManager::requestDtMirror(int deviceIndex)
+{
+    // Same reentrancy rule as requestCast: never block inside JS eval.
+    QTimer::singleShot(0, this, [this, deviceIndex] {
+        if (!m_dtAvailable) {
+            Q_EMIT notice(tr("DoubleTake nincs telepítve (AUR: doubletake-bin)"), "err");
+            return;
+        }
+        if (deviceIndex < 0 || deviceIndex >= m_devices.size())
+            return;
+        const QVariantMap dev = m_devices.at(deviceIndex).toMap();
+        if (deviceType(deviceIndex) != QLatin1String("airplay")) {
+            Q_EMIT notice(tr("Tükrözés csak AirPlay eszközön"), "err");
+            return;
+        }
+        dtStart(dev.value(QStringLiteral("host")).toString());
+    });
+}
+
+void CastManager::dtStart(const QString &host)
+{
+    if (host.isEmpty())
+        return;
+    if (dtStreaming() || m_dtState == QLatin1String("connecting")) {
+        Q_EMIT notice(tr("Már fut tükrözés (%1)").arg(m_dtHost), "info");
+        return;
+    }
+    if (!ensureDtDaemon()) {
+        Q_EMIT notice(tr("DoubleTake daemon nem indul"), "err");
+        return;
+    }
+    m_dtHost = host;
+    m_dtMuted = false;
+    m_dtMuteSent = false;
+    dtSetState(QStringLiteral("connecting"));
+    m_dtTimer->start();
+    Q_EMIT notice(tr("Tükrözés indítása: %1…").arg(host), "info");
+    dtCtl({QStringLiteral("connect"), host}, 30000);
+    pollDt();
+}
+
+void CastManager::pollDt()
+{
+    if (m_dtHost.isEmpty() || m_dtState == QLatin1String("idle")) {
+        m_dtTimer->stop();
+        return;
+    }
+    const QJsonObject st = dtCtl({QStringLiteral("status")}, 10000);
+    if (st.isEmpty() || !st.value(QStringLiteral("ok")).toBool())
+        return; // transient: keep polling
+    // Top-level state plus per-stream entries (pin_required lives there).
+    QString state = st.value(QStringLiteral("state")).toString();
+    bool needsPin = st.value(QStringLiteral("needs_pin")).toBool();
+    const QJsonArray streams = st.value(QStringLiteral("streams")).toArray();
+    for (const QJsonValue &v : streams) {
+        const QJsonObject s = v.toObject();
+        const QString ss = s.value(QStringLiteral("state")).toString();
+        if (ss == QLatin1String("pin_required"))
+            state = ss;
+        else if (state != QLatin1String("pin_required")
+                 && ss == QLatin1String("streaming"))
+            state = ss;
+        if (s.value(QStringLiteral("needs_pin")).toBool())
+            needsPin = true;
+    }
+    if (state.isEmpty())
+        return;
+    if (state == QLatin1String("pin_required") || needsPin) {
+        dtSetState(QStringLiteral("pin_required"));
+        return;
+    }
+    if (state == QLatin1String("streaming")) {
+        const bool first = !dtStreaming();
+        dtSetState(QStringLiteral("streaming"));
+        if (first) {
+            // No auto-mute: the sender starts at a moderate session gain
+            // (-20 dB), so the receiver's own master volume rules.
+            // The panel mute pill is still available.
+            Q_EMIT notice(tr("Tükrözés él: %1").arg(m_dtHost), "ok");
+        }
+        return;
+    }
+    if (state == QLatin1String("idle")) {
+        if (dtStreaming() || m_dtState == QLatin1String("connecting")) {
+            Q_EMIT notice(tr("Tükrözés véget ért"), "info");
+        }
+        m_dtHost.clear();
+        m_dtMuted = false;
+        m_dtMuteSent = false;
+        dtSetState(QStringLiteral("idle"));
+        m_dtTimer->stop();
+    }
+    // "connecting": keep polling.
+}
+
+void CastManager::submitDtPin(const QString &pin)
+{
+    const QString digits = pin.trimmed();
+    if (digits.isEmpty() || m_dtHost.isEmpty())
+        return;
+    QTimer::singleShot(0, this, [this, digits] {
+        const QJsonObject r =
+            dtCtl({QStringLiteral("pin"), digits}, 30000);
+        if (!r.value(QStringLiteral("ok")).toBool(false)) {
+            Q_EMIT notice(tr("PIN elutasítva"), "err");
+            return;
+        }
+        Q_EMIT notice(tr("PIN elfogadva…"), "info");
+        pollDt();
+    });
+}
+
+void CastManager::stopDtMirror()
+{
+    const QString host = m_dtHost;
+    QTimer::singleShot(0, this, [this, host] {
+        if (!host.isEmpty())
+            dtCtl({QStringLiteral("disconnect"), host}, 15000);
+        m_dtHost.clear();
+        m_dtMuted = false;
+        m_dtMuteSent = false;
+        dtSetState(QStringLiteral("idle"));
+        m_dtTimer->stop();
+        Q_EMIT notice(tr("Tükrözés leállítva"), "info");
+    });
+}
+
+void CastManager::toggleDtMute()
+{
+    if (!dtStreaming() || m_dtHost.isEmpty())
+        return;
+    QTimer::singleShot(0, this, [this] {
+        const QString cmd = m_dtMuted ? QStringLiteral("unmute")
+                                      : QStringLiteral("mute");
+        const QJsonObject r = dtCtl({cmd, m_dtHost}, 10000);
+        if (r.value(QStringLiteral("ok")).toBool(false)) {
+            m_dtMuted = !m_dtMuted;
+            Q_EMIT dtStateChanged();
+        }
+    });
 }

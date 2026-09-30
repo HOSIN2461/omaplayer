@@ -7,6 +7,7 @@
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QMessageAuthenticationCode>
+#include <QNetworkInterface>
 #include <QRandomGenerator>
 #include <QTcpSocket>
 #include <QTimer>
@@ -399,6 +400,14 @@ AirPlaySession::Msg AirPlaySession::exchange(
             return fail;
         }
     }
+    if (qgetenv("MIRROR_RAWDUMP") == "1") {
+        const QByteArray pend =
+            m_cc.on ? m_cc.plain.left(600) : m_leftover.left(600);
+        castDebug(QStringLiteral("ap2: RAWDUMP %1 %2 pendingBytes=%3 hex=%4")
+                      .arg(method, uri)
+                      .arg(m_cc.on ? m_cc.plain.size() : m_leftover.size())
+                      .arg(QString::fromLatin1(pend.toHex(' '))));
+    }
     fail.error = tr("időtúllépés");
     return fail;
 }
@@ -479,11 +488,27 @@ QVariantMap AirPlaySession::mirrorSessionPlist(const QString &sessionUuid,
 {
     // DoubleTake mirrorSetupRequest.sessionPlist: the session fields shared
     // by the control SETUP and the legacy media-first SETUPs.
+    // NOTE: deviceID/macAddress use the REAL interface MAC (like DoubleTake's
+    // uuidToMAC client ID). The old hardcoded AA:BB:CC:DD:EE:FF broadcast MAC
+    // correlates with the TV never starting NTP sync in our sessions.
+    QString ourMac;
+    for (const QNetworkInterface &ni : QNetworkInterface::allInterfaces()) {
+        if (ni.hardwareAddress().isEmpty())
+            continue;
+        for (const QNetworkAddressEntry &e : ni.addressEntries()) {
+            if (e.ip().toString() == m_localIp) {
+                ourMac = ni.hardwareAddress();
+                break;
+            }
+        }
+        if (!ourMac.isEmpty())
+            break;
+    }
+    if (ourMac.isEmpty())
+        ourMac = QStringLiteral("AA:BB:CC:DD:EE:FF");
     QVariantMap p;
-    p.insert(QStringLiteral("deviceID"),
-             QStringLiteral("AA:BB:CC:DD:EE:FF"));
-    p.insert(QStringLiteral("macAddress"),
-             QStringLiteral("AA:BB:CC:DD:EE:FF"));
+    p.insert(QStringLiteral("deviceID"), ourMac);
+    p.insert(QStringLiteral("macAddress"), ourMac);
     p.insert(QStringLiteral("sessionUUID"), sessionUuid);
     p.insert(QStringLiteral("sourceVersion"), sourceVersion);
     p.insert(QStringLiteral("isScreenMirroringSession"), true);
@@ -724,10 +749,12 @@ void AirPlaySession::onEventData()
 bool AirPlaySession::bindTiming()
 {
     m_timing = new QUdpSocket(this);
-    // PROBE HACK: ufw DROPs inbound UDP by default; 53317/udp is one of the
-    // few allowed inbound ports. If the TV's NTP queries reach us here,
-    // phase-2 may stop stalling (production needs a proper ufw rule).
-    if (!m_timing->bind(QHostAddress::Any, 53317)
+    // DoubleTake paradigm: ephemeral timing port (the receiver's NTP probe
+    // must reach us; a fixed port can be firewalled per-port). Override with
+    // MIRROR_TIMING_PORT=N for the old fixed-port behavior.
+    bool ok = false;
+    const int fixedPort = QString::fromLatin1(qgetenv("MIRROR_TIMING_PORT")).toInt(&ok);
+    if (!(ok && fixedPort > 0 && m_timing->bind(QHostAddress::Any, quint16(fixedPort)))
         && !m_timing->bind(QHostAddress::Any, 0)) {
         castDebug(QStringLiteral("ap2: timing bind failed"));
         m_timing->deleteLater();
@@ -1035,6 +1062,11 @@ void AirPlaySession::stop()
 
 bool AirPlaySession::mirrorProbe()
 {
+    // iPhone-replica mode (MIRROR_IPHONE=1): byte-level copy of the
+    // captured iPhone16,2 → UxPlay flow (SETUP#1+ekey/eiv → GET /info →
+    // bare RECORD → video-only SETUP, no port in URI, no shk/shiv).
+    if (qgetenv("MIRROR_IPHONE") == "1")
+        return mirrorProbeIphone();
     // Mirror-handshake probe, DoubleTake negotiation policy:
     //   verify → GET /info (capabilities) → control-first SETUP
     //   (combinedGetInfo) → [accepted: RECORD → audio → video] /
@@ -1169,11 +1201,18 @@ bool AirPlaySession::mirrorProbe()
                            timingPeerId);
     control.insert(QStringLiteral("updateSessionRequest"), false);
     control.insert(QStringLiteral("combinedGetInfoWithControlSetup"), true);
-    Msg ctl = rtsp(QStringLiteral("SETUP"), audioUri, control);
+    Msg ctl;
     int eventPort = 0;
     bool skipRecord = false;
     bool mediaFirst = false;
-    if (ctl.ok && (ctl.code == 200 || ctl.code == 204)) {
+    // Diagnostic override: MIRROR_MEDIA_FIRST=1 skips the control-first
+    // attempt and runs the pure legacy order (audio → video → RECORD).
+    if (qgetenv("MIRROR_MEDIA_FIRST") == "1") {
+        mediaFirst = true;
+        castDebug(QStringLiteral("ap2: media-first forced (env)"));
+    } else {
+        ctl = rtsp(QStringLiteral("SETUP"), audioUri, control);
+        if (ctl.ok && (ctl.code == 200 || ctl.code == 204)) {
         const QVariantMap m = Bplist::decode(ctl.body).toMap();
         eventPort = m.value(QStringLiteral("eventPort")).toInt();
         if (m.contains(QStringLiteral("info"))) {
@@ -1198,8 +1237,12 @@ bool AirPlaySession::mirrorProbe()
                       "err");
         stop();
         return true;
+        }
     }
-    if (eventPort > 0)
+    const bool noEvent = qgetenv("MIRROR_NOEVENT") == "1";
+    if (noEvent)
+        castDebug(QStringLiteral("ap2: event skipped (env)"));
+    if (eventPort > 0 && !noEvent)
         connectEvent(eventPort, shared); // best-effort
 
     auto recordSession = [this, &sessUuid, &audioUri] {
@@ -1222,10 +1265,117 @@ bool AirPlaySession::mirrorProbe()
         Q_UNUSED(skipRecord);
     }
 
+    // 4b. Mirror ANNOUNCE (diagnostic, MIRROR_ANNOUNCE=1): a real iPhone
+    //     sends ANNOUNCE+SDP before stream SETUPs (openairplay audio
+    //     Example 3 shape: ALAC audio + H264 video, fpaeskey/aesiv). The
+    //     LG shows "device connected", waits, then drops home without it
+    //     — it is waiting for exactly this. Never aborts: the ANNOUNCE
+    //     code itself is diagnostic information.
+    if (qgetenv("MIRROR_ANNOUNCE") == "1") {
+        QString devId;
+        const QList<QNetworkInterface> nis =
+            QNetworkInterface::allInterfaces();
+        for (const QNetworkInterface &ni : nis) {
+            bool ours = false;
+            for (const QNetworkAddressEntry &e : ni.addressEntries()) {
+                if (e.ip().toString() == m_localIp) {
+                    ours = true;
+                    break;
+                }
+            }
+            if (ours && !ni.hardwareAddress().isEmpty()) {
+                devId = QStringLiteral("0x")
+                        + ni.hardwareAddress()
+                              .remove(QChar::fromLatin1(':'))
+                              .toLower();
+                break;
+            }
+        }
+        QString sdp =
+            QStringLiteral("v=0\r\no=AirTunes %1 0 IN IP4 %2\r\ns=AirTunes\r\n"
+                           "c=IN IP4 %2\r\nt=0 0\r\n"
+                           "m=audio 0 RTP/AVP 96\r\n"
+                           "a=rtpmap:96 AppleLossless\r\n"
+                           "a=fmtp:96 352 0 16 40 10 14 2 255 0 0 44100\r\n"
+                           "a=fpaeskey:%3\r\n"
+                           "a=aesiv:%4\r\n"
+                           "a=min-latency:4410\r\n"
+                           "m=video 0 RTP/AVP 97\r\n"
+                           "a=rtpmap:97 H264/90000\r\n"
+                           "a=fmtp:97\r\n")
+                .arg(audioStreamId)
+                .arg(m_localIp,
+                     QString::fromLatin1(randomBytes(45).toBase64()),
+                     QString::fromLatin1(randomBytes(16).toBase64()));
+        QList<QPair<QString, QString>> anHeaders;
+        if (!devId.isEmpty())
+            anHeaders.append({QStringLiteral("X-Apple-Device-ID"), devId});
+        Msg an = rtspRaw(QStringLiteral("ANNOUNCE"), audioUri,
+                         sdp.toLatin1(),
+                         QStringLiteral("application/sdp"), anHeaders, 20000);
+        castDebug(QStringLiteral("ap2: ANNOUNCE code=%1 %2")
+                      .arg(an.code)
+                      .arg(an.ok ? shortBody(an.body) : an.error));
+    }
+
     // 5. Audio stream descriptor (DoubleTake audioStreamBase): ALAC
     //    (ct=2/spf=352/sr=44100/format 0x40000), usingScreen, latency lead
     //    as max only. Legacy layout = controlPort (+shk); modern layout =
     //    streamConnections dict. Descriptor shk = fresh random key.
+    //    MIRROR_VIDEOFIRST=1: video SETUP goes BEFORE audio (iPhone order:
+    //    the real sender's first stream SETUP after RECORD is video-only).
+    const bool videoFirst = qgetenv("MIRROR_VIDEOFIRST") == "1";
+    Msg svEarly;
+    int dataPortEarly = 0;
+    bool videoDoneEarly = false;
+    // videoStreamId/videoUri/sessUuid/srcVer/timingProtocol/timingPort/
+    // timingPeerId/mediaFirst are all defined above; vbody shape mirrors
+    // step 6 below (control-first: bare streams array).
+    if (videoFirst) {
+        castDebug(QStringLiteral("ap2: video-first forced (env)"));
+        const QByteArray eShk = randomBytes(16);
+        const QByteArray eShiv = randomBytes(16);
+        QVariantMap evstream;
+        evstream.insert(QStringLiteral("type"), 110);
+        evstream.insert(QStringLiteral("streamConnectionID"), videoStreamId);
+        evstream.insert(QStringLiteral("latencyMs"), 75);
+        QVariantList etsNames;
+        for (const char *n : {"SubSu", "BePxT", "AfPxT", "BefEn", "EmEnc"}) {
+            QVariantMap e;
+            e.insert(QStringLiteral("name"), QString::fromLatin1(n));
+            etsNames.append(e);
+        }
+        evstream.insert(QStringLiteral("timestampInfo"), etsNames);
+        evstream.insert(QStringLiteral("shk"), eShk);
+        evstream.insert(QStringLiteral("shiv"), eShiv);
+        QVariantMap evbody;
+        if (mediaFirst) {
+            evbody = mirrorSessionPlist(sessUuid, srcVer, timingProtocol,
+                                        int(timingPort), timingPeerId);
+            QVariantList sl;
+            sl.append(evstream);
+            evbody.insert(QStringLiteral("streams"), sl);
+        } else {
+            QVariantList sl;
+            sl.append(evstream);
+            evbody.insert(QStringLiteral("streams"), sl);
+        }
+        svEarly = rtsp(QStringLiteral("SETUP"), videoUri, evbody, {}, 20000);
+        if (svEarly.ok && (svEarly.code == 200 || svEarly.code == 204)) {
+            const QVariantMap m = Bplist::decode(svEarly.body).toMap();
+            const QVariantList sl =
+                m.value(QStringLiteral("streams")).toList();
+            for (const QVariant &v : sl) {
+                const QVariantMap s = v.toMap();
+                if (s.value(QStringLiteral("type")).toInt() == 110)
+                    dataPortEarly = s.value(QStringLiteral("dataPort")).toInt();
+            }
+        }
+        castDebug(QStringLiteral("ap2: video-first SETUP code=%1 dataPort=%2 %3")
+                      .arg(svEarly.code).arg(dataPortEarly)
+                      .arg(svEarly.ok ? shortBody(svEarly.body) : svEarly.error));
+        videoDoneEarly = true;
+    }
     QUdpSocket *rtcp = new QUdpSocket(this);
     rtcp->bind(QHostAddress::Any, 0);
     const int rtcpPort = int(rtcp->localPort());
@@ -1293,7 +1443,7 @@ bool AirPlaySession::mirrorProbe()
                   .arg(sa.code).arg(audioDataPort).arg(audioControlPort)
                   .arg(eventPort)
                   .arg(sa.ok ? shortBody(sa.body) : sa.error));
-    if (eventPort > 0)
+    if (eventPort > 0 && !noEvent)
         connectEvent(eventPort, shared); // best-effort
     if (!sa.ok || (sa.code != 200 && sa.code != 204)) {
         Q_EMIT notice(tr("Mirror-próba: audio SETUP elutasítva (%1)")
@@ -1333,8 +1483,14 @@ bool AirPlaySession::mirrorProbe()
         sl.append(vstream);
         vbody.insert(QStringLiteral("streams"), sl);
     }
-    Msg sv = rtsp(QStringLiteral("SETUP"), videoUri, vbody, {}, 20000);
+    Msg sv;
     int dataPort = 0;
+    if (videoDoneEarly) {
+        sv = svEarly;
+        dataPort = dataPortEarly;
+    } else {
+    Msg svFresh = rtsp(QStringLiteral("SETUP"), videoUri, vbody, {}, 20000);
+    sv = svFresh;
     if (sv.ok && (sv.code == 200 || sv.code == 204)) {
         const QVariantMap m = Bplist::decode(sv.body).toMap();
         const QVariantList sl = m.value(QStringLiteral("streams")).toList();
@@ -1343,6 +1499,7 @@ bool AirPlaySession::mirrorProbe()
             if (s.value(QStringLiteral("type")).toInt() == 110)
                 dataPort = s.value(QStringLiteral("dataPort")).toInt();
         }
+    }
     }
     castDebug(QStringLiteral("ap2: video SETUP code=%1 dataPort=%2 %3")
                   .arg(sv.code).arg(dataPort)
@@ -1354,10 +1511,13 @@ bool AirPlaySession::mirrorProbe()
         castDebug(QStringLiteral("ap2: mirror RECORD code=%1").arg(rec.code));
     }
 
+    const QString orderLabel =
+        (mediaFirst ? QStringLiteral("media-first")
+                    : QStringLiteral("control-first"))
+        + (videoFirst ? QStringLiteral("+video-first") : QString());
     Q_EMIT notice(tr("Mirror-próba (%1): info %2, control %3, audio %4, "
                      "video %5, dataPort %6")
-                      .arg(mediaFirst ? QStringLiteral("media-first")
-                                      : QStringLiteral("control-first"))
+                      .arg(orderLabel)
                       .arg(infoMsg.code)
                       .arg(ctl.code)
                       .arg(sa.code)
@@ -1367,6 +1527,394 @@ bool AirPlaySession::mirrorProbe()
     rtcp->deleteLater();
     // Always release the session: abandoned pipelines (black screen!) may
     // block later phase-2 allocations on single-pipeline TVs.
+    stop();
+    return true;
+}
+
+bool AirPlaySession::mirrorProbeIphone()
+{
+    // Byte-level replica of the captured iPhone16,2 (AirPlay/980.77.1) →
+    // UxPlay mirror flow (2026-09-21): /fp-setup is skipped (the LG 404s
+    // it), then SETUP#1 with ekey/eiv → bare GET /info → bare RECORD →
+    // video-only SETUP (timestampInfo + latencyMs + type + ID, NO
+    // shk/shiv), all to a single session URI WITHOUT port. No ANNOUNCE,
+    // no event channel, no audio SETUP — exactly what the iPhone sends.
+    //
+    // ekey/eiv are REPLAYED from that capture (diagnostic scaffolding).
+    // Decrypted aeskey for this envelope (UxPlay logged it):
+    //   450f7b33e00466eec7d2c28f7a2fc2a3
+    // eiv (base64): b90Z4LiETRoXz98SwldMQw==
+    closeAll();
+    m_uaRtsp = QStringLiteral("AirPlay/980.77.1");
+    if (m_host.isEmpty() || !m_creds.isValid()) {
+        Q_EMIT notice(tr("Hiányzó AirPlay eszköz vagy párosítás"), "err");
+        return false;
+    }
+    castDebug(QStringLiteral("ap2> mirrorProbe-iphone %1:%2")
+                  .arg(m_host).arg(m_port));
+    m_ctrl = new QTcpSocket(this);
+    m_ctrl->connectToHost(m_host, m_port);
+    if (!m_ctrl->waitForConnected(6000)) {
+        Q_EMIT notice(tr("AirPlay eszköz nem elérhető"), "err");
+        closeAll();
+        return false;
+    }
+    m_localIp = m_ctrl->localAddress().toString();
+    QString ourMac;
+    for (const QNetworkInterface &ni : QNetworkInterface::allInterfaces()) {
+        bool ours = false;
+        for (const QNetworkAddressEntry &e : ni.addressEntries()) {
+            if (e.ip().toString() == m_localIp
+                && !ni.hardwareAddress().isEmpty()) {
+                ours = true;
+                break;
+            }
+        }
+        if (ours) {
+            ourMac = ni.hardwareAddress();
+            break;
+        }
+    }
+    if (ourMac.isEmpty())
+        ourMac = QStringLiteral("AA:BB:CC:DD:EE:FF");
+    m_sessionId = QRandomGenerator::global()->generate();
+    m_activeRemote = QRandomGenerator::global()->generate();
+    m_dacp = QString::number(
+        (quint64(QRandomGenerator::global()->generate()) << 32)
+            | QRandomGenerator::global()->generate(),
+        16).toUpper();
+    m_cseq = 0;
+
+    QByteArray shared;
+    if (!verifyRaw(shared)) {
+        Q_EMIT notice(tr("AirPlay verify sikertelen"), "err");
+        closeAll();
+        return false;
+    }
+    enableControl(shared);
+
+    // 1. Bare GET /info (iPhone sends no qualifier body here).
+    Msg infoMsg = rtspRaw(QStringLiteral("GET"), QStringLiteral("/info"),
+                          {}, {},
+                          {{QStringLiteral("X-Apple-ProtocolVersion"),
+                            QStringLiteral("1")}});
+    QVariantMap info;
+    if (infoMsg.ok
+        && (infoMsg.code == 200 || infoMsg.code == 204)
+        && !infoMsg.body.isEmpty())
+        info = Bplist::decode(infoMsg.body).toMap();
+    castDebug(QStringLiteral("ap2: iphone info model=%1 srcver=%2 "
+                             "features=0x%3 code=%4")
+                  .arg(info.value(QStringLiteral("model")).toString(),
+                       info.value(QStringLiteral("sourceVersion")).toString(),
+                       QString::number(
+                           info.value(QStringLiteral("features"))
+                               .toULongLong(),
+                           16))
+                  .arg(infoMsg.code));
+
+    // 2. NTP timing socket (iPhone announces its own timing port; we
+    //    announce ours — the responder side we actually implement).
+    if (!bindTiming()) {
+        Q_EMIT notice(tr("AirPlay időzítő-hiba"), "err");
+        closeAll();
+        return false;
+    }
+    const int timingPort = int(m_timing->localPort());
+
+    // 3. Single session URI (iPhone: no port!). Stream IDs are chosen
+    //    per-shape below (step 6/7).
+    quint64 sessNum = QRandomGenerator::global()->generate64();
+    if (sessNum == 0)
+        sessNum = 1;
+    const QString sessionUri = QStringLiteral("rtsp://%1/%2")
+                                   .arg(m_host).arg(sessNum);
+    m_teardownUri = sessionUri;
+    const QString sessUuid =
+        QUuid::createUuid().toString(QUuid::WithoutBraces).toUpper();
+    const QString corrUuid =
+        QUuid::createUuid().toString(QUuid::WithoutBraces).toUpper();
+
+    // 4. SETUP#1: session fields + replayed ekey/eiv (captured envelope).
+    QVariantMap s1 = mirrorSessionPlist(
+        sessUuid, QStringLiteral("980.77.1"),
+        QStringLiteral("NTP"), timingPort, QString());
+    s1.insert(QStringLiteral("deviceID"), ourMac);
+    s1.insert(QStringLiteral("macAddress"), ourMac);
+    s1.insert(QStringLiteral("model"), QStringLiteral("iPhone16,2"));
+    s1.insert(QStringLiteral("osName"), QStringLiteral("iPhone OS"));
+    s1.insert(QStringLiteral("osVersion"), QStringLiteral("27.0"));
+    s1.insert(QStringLiteral("osBuildVersion"), QStringLiteral("24A437"));
+    s1.insert(QStringLiteral("sessionCorrelationUUID"), corrUuid);
+    // MIRROR_NOEKEY=1: keyless session (no et/ekey/eiv) — the LG 500s
+    // RECORD on a replayed ekey (no FP-SAP possible: /auth-setup=403),
+    // while a keyless SETUP#1 + headered RECORD both return 200.
+    if (qgetenv("MIRROR_NOEKEY") != "1") {
+        s1.insert(QStringLiteral("et"), 32);
+        s1.insert(QStringLiteral("ekey"),
+                  QByteArray::fromHex(
+                      "46504c59010201000000003c00000000"
+                      "b1f0dd34475520eed28fe35e4debcd5e"
+                      "00000010459a9a49a7905af27ebc04b1"
+                      "6ad9814a1f49ff606408d75f2f14f987"
+                      "9a52ba225e8dc338"));
+        s1.insert(QStringLiteral("eiv"),
+                  QByteArray::fromBase64("b90Z4LiETRoXz98SwldMQw=="));
+    } else {
+        castDebug(QStringLiteral("ap2: iphone setup1 keyless (env)"));
+    }
+    s1.insert(QStringLiteral("updateSessionRequest"), false);
+    s1.insert(QStringLiteral("combinedGetInfoWithControlSetup"), true);
+    s1.insert(QStringLiteral("internalBuild"), false);
+    s1.insert(QStringLiteral("diagnosticsAndUsage"), true);
+    s1.insert(QStringLiteral("statsCollectionEnabled"), false);
+    Msg s1msg = rtsp(QStringLiteral("SETUP"), sessionUri, s1,
+                     {{QStringLiteral("X-Apple-ProtocolVersion"),
+                       QStringLiteral("1")}},
+                     20000);
+    if (s1msg.ok && (s1msg.code == 200 || s1msg.code == 204)) {
+        const QVariantMap m = Bplist::decode(s1msg.body).toMap();
+        castDebug(QStringLiteral("ap2: iphone setup1 accepted "
+                                 "eventPort=%1 timingPort=%2")
+                      .arg(m.value(QStringLiteral("eventPort")).toInt())
+                      .arg(m.value(QStringLiteral("timingPort")).toInt()));
+        // The LG 500s RECORD without a connected event channel (runs
+        // #1/#3 had it connected → RECORD 200). iPhone→UxPlay never
+        // uses events, but this TV's state machine seems to gate on it.
+        const int evPort = m.value(QStringLiteral("eventPort")).toInt();
+        if (evPort > 0)
+            connectEvent(evPort, shared); // best-effort
+    }
+
+    // 5. RECORD with session headers (DoubleTake recordSession): the LG
+    //    500s a bare RECORD (unlike UxPlay) — and a 500 is retryable
+    //    (same "let's try again" as our /play flow).
+    Msg rec = rtspRaw(QStringLiteral("RECORD"), sessionUri, {}, {},
+                      {{QStringLiteral("Session"), sessUuid},
+                       {QStringLiteral("Range"), QStringLiteral("npt=0-")},
+                       {QStringLiteral("RTP-Info"),
+                        QStringLiteral("seq=0;rtptime=0")}},
+                      20000);
+    int recTries = 0;
+    while (rec.ok && rec.code == 500 && recTries < 3) {
+        ++recTries;
+        pump(1000);
+        rec = rtspRaw(QStringLiteral("RECORD"), sessionUri, {}, {},
+                      {{QStringLiteral("Session"), sessUuid},
+                       {QStringLiteral("Range"), QStringLiteral("npt=0-")},
+                       {QStringLiteral("RTP-Info"),
+                        QStringLiteral("seq=0;rtptime=0")}},
+                      20000);
+    }
+    castDebug(QStringLiteral("ap2: iphone RECORD code=%1").arg(rec.code));
+
+    // 5b. Combined audio+video SETUP (MIRROR_COMBINED=1): the two shapes
+    //     that hang alone (audio-DT-lg + video-iPhone) in ONE streams
+    //     array. Theory: the TV waits for the complementary stream and
+    //     only completes the pair atomically.
+    if (qgetenv("MIRROR_COMBINED") == "1") {
+        QUdpSocket *rtcp2 = new QUdpSocket(this);
+        rtcp2->bind(QHostAddress::Any, 0);
+        const int rtcpPort2 = int(rtcp2->localPort());
+        const qlonglong aId = qlonglong(
+            QRandomGenerator::global()->generate64() & 0x7FFFFFFFFFFFFFFF);
+        const qlonglong vId =
+            qlonglong(QRandomGenerator::global()->generate64());
+        QVariantMap ca;
+        ca.insert(QStringLiteral("type"), 96);
+        ca.insert(QStringLiteral("streamConnectionID"), aId);
+        ca.insert(QStringLiteral("ct"), 2);
+        ca.insert(QStringLiteral("spf"), 352);
+        ca.insert(QStringLiteral("sr"), 44100);
+        ca.insert(QStringLiteral("audioFormat"), 0x40000);
+        ca.insert(QStringLiteral("audioMode"), QStringLiteral("default"));
+        ca.insert(QStringLiteral("usingScreen"), true);
+        ca.insert(QStringLiteral("latencyMin"), 0);
+        ca.insert(QStringLiteral("latencyMax"), 3748);
+        ca.insert(QStringLiteral("controlPort"), rtcpPort2);
+        ca.insert(QStringLiteral("shk"), randomBytes(32));
+        QVariantList cts;
+        for (const char *n : {"SubSu", "BePxT", "AfPxT", "BefEn", "EmEnc"}) {
+            QVariantMap e;
+            e.insert(QStringLiteral("name"), QString::fromLatin1(n));
+            cts.append(e);
+        }
+        QVariantMap cv;
+        cv.insert(QStringLiteral("timestampInfo"), cts);
+        cv.insert(QStringLiteral("latencyMs"), 100);
+        cv.insert(QStringLiteral("type"), 110);
+        cv.insert(QStringLiteral("streamConnectionID"), vId);
+        QVariantMap cbody;
+        QVariantList csl;
+        csl.append(ca);
+        csl.append(cv);
+        cbody.insert(QStringLiteral("streams"), csl);
+        Msg cs = rtsp(QStringLiteral("SETUP"), sessionUri, cbody,
+                      {{QStringLiteral("X-Apple-ProtocolVersion"),
+                        QStringLiteral("1")}},
+                      25000);
+        int cAudioData = 0, cAudioCtrl = 0, cVideoData = 0;
+        if (cs.ok && (cs.code == 200 || cs.code == 204)) {
+            const QVariantMap m = Bplist::decode(cs.body).toMap();
+            const QVariantList rl =
+                m.value(QStringLiteral("streams")).toList();
+            for (const QVariant &v : rl) {
+                const QVariantMap s = v.toMap();
+                if (s.value(QStringLiteral("type")).toInt() == 96) {
+                    cAudioData =
+                        s.value(QStringLiteral("dataPort")).toInt();
+                    cAudioCtrl =
+                        s.value(QStringLiteral("controlPort")).toInt();
+                } else if (s.value(QStringLiteral("type")).toInt() == 110) {
+                    cVideoData =
+                        s.value(QStringLiteral("dataPort")).toInt();
+                }
+            }
+        }
+        castDebug(QStringLiteral("ap2: iphone combined SETUP code=%1 "
+                                 "audioData=%2 audioCtrl=%3 videoData=%4 %5")
+                      .arg(cs.code).arg(cAudioData).arg(cAudioCtrl)
+                      .arg(cVideoData)
+                      .arg(cs.ok ? shortBody(cs.body) : cs.error));
+        Q_EMIT notice(tr("Mirror-próba (combined): info %1, setup1 %2, "
+                         "record %3, combo %4, dataPort %5")
+                          .arg(infoMsg.code)
+                          .arg(s1msg.code)
+                          .arg(rec.code)
+                          .arg(cs.code)
+                          .arg(cVideoData),
+                      cVideoData > 0 ? "ok" : "info");
+        rtcp2->deleteLater();
+        stop();
+        return true;
+    }
+
+    // 6. Audio-first. MIRROR_DT=1: DoubleTake-lg shape (ALAC ct=2 +
+    //    streamConnectionID + controlPort + shk32, no isMedia); default:
+    //    captured iPhone AAC-ELD shape (no shk, no stream ID).
+    QUdpSocket *rtcp = new QUdpSocket(this);
+    rtcp->bind(QHostAddress::Any, 0);
+    const int rtcpPort = int(rtcp->localPort());
+    const bool dtMode = qgetenv("MIRROR_DT") == "1";
+    // MIRROR_MIX=1: audio in DoubleTake-lg shape + video in iPhone shape
+    // (the two "parsed-OK" hang-shapes) back to back.
+    const bool mixMode = qgetenv("MIRROR_MIX") == "1";
+    const qlonglong audioStreamId = qlonglong(
+        QRandomGenerator::global()->generate64() & 0x7FFFFFFFFFFFFFFF);
+    QVariantMap astream;
+    if (dtMode || mixMode) {
+        astream.insert(QStringLiteral("type"), 96);
+        astream.insert(QStringLiteral("streamConnectionID"), audioStreamId);
+        astream.insert(QStringLiteral("ct"), 2);
+        astream.insert(QStringLiteral("spf"), 352);
+        astream.insert(QStringLiteral("sr"), 44100);
+        astream.insert(QStringLiteral("audioFormat"), 0x40000);
+        astream.insert(QStringLiteral("audioMode"),
+                       QStringLiteral("default"));
+        astream.insert(QStringLiteral("usingScreen"), true);
+        astream.insert(QStringLiteral("latencyMin"), 0);
+        astream.insert(QStringLiteral("latencyMax"), 3748);
+        astream.insert(QStringLiteral("controlPort"), rtcpPort);
+        astream.insert(QStringLiteral("shk"), randomBytes(32));
+        castDebug(QStringLiteral("ap2: iphone audio doubletake-lg shape"));
+    } else {
+        astream.insert(QStringLiteral("usingScreen"), true);
+        astream.insert(QStringLiteral("audioFormat"), 16777216);
+        astream.insert(QStringLiteral("supportsDynamicStreamID"), true);
+        astream.insert(QStringLiteral("redundantAudio"), 2);
+        astream.insert(QStringLiteral("ct"), 8);
+        astream.insert(QStringLiteral("audioMode"),
+                       QStringLiteral("default"));
+        astream.insert(QStringLiteral("spf"), 480);
+        astream.insert(QStringLiteral("latencyMax"), 7497);
+        astream.insert(QStringLiteral("controlPort"), rtcpPort);
+        astream.insert(QStringLiteral("isMedia"), true);
+        astream.insert(QStringLiteral("type"), 96);
+        astream.insert(QStringLiteral("sr"), 44100);
+        astream.insert(QStringLiteral("latencyMin"), 0);
+    }
+    QVariantMap abody;
+    QVariantList asl;
+    asl.append(astream);
+    abody.insert(QStringLiteral("streams"), asl);
+    Msg sa = rtsp(QStringLiteral("SETUP"), sessionUri, abody,
+                  {{QStringLiteral("X-Apple-ProtocolVersion"),
+                    QStringLiteral("1")}},
+                  20000);
+    int audioDataPort = 0, audioControlPort = 0;
+    if (sa.ok && (sa.code == 200 || sa.code == 204)) {
+        const QVariantMap m = Bplist::decode(sa.body).toMap();
+        const QVariantList rl = m.value(QStringLiteral("streams")).toList();
+        for (const QVariant &v : rl) {
+            const QVariantMap s = v.toMap();
+            if (s.value(QStringLiteral("type")).toInt() == 96) {
+                audioDataPort =
+                    s.value(QStringLiteral("dataPort")).toInt();
+                audioControlPort =
+                    s.value(QStringLiteral("controlPort")).toInt();
+            }
+        }
+    }
+    castDebug(QStringLiteral("ap2: iphone audio SETUP code=%1 dataPort=%2 "
+                             "controlPort=%3 %4")
+                  .arg(sa.code).arg(audioDataPort).arg(audioControlPort)
+                  .arg(sa.ok ? shortBody(sa.body) : sa.error));
+
+    // 7. Video SETUP. MIRROR_DT=1: DoubleTake shape (latencyMs 75,
+    //    masked-positive ID, shk16/shiv16); default: iPhone shape
+    //    (latencyMs 100, full-range ID, no shk/shiv).
+    const qlonglong videoStreamId = (dtMode && !mixMode)
+        ? qlonglong(QRandomGenerator::global()->generate64()
+                    & 0x7FFFFFFFFFFFFFFF)
+        : qlonglong(QRandomGenerator::global()->generate64());
+    QVariantList tsNames;
+    for (const char *n : {"SubSu", "BePxT", "AfPxT", "BefEn", "EmEnc"}) {
+        QVariantMap e;
+        e.insert(QStringLiteral("name"), QString::fromLatin1(n));
+        tsNames.append(e);
+    }
+    QVariantMap vstream;
+    vstream.insert(QStringLiteral("timestampInfo"), tsNames);
+    vstream.insert(QStringLiteral("latencyMs"),
+                   (dtMode && !mixMode) ? 75 : 100);
+    vstream.insert(QStringLiteral("type"), 110);
+    vstream.insert(QStringLiteral("streamConnectionID"), videoStreamId);
+    if (dtMode && !mixMode) {
+        vstream.insert(QStringLiteral("shk"), randomBytes(16));
+        vstream.insert(QStringLiteral("shiv"), randomBytes(16));
+    }
+    QVariantMap vbody;
+    QVariantList sl;
+    sl.append(vstream);
+    vbody.insert(QStringLiteral("streams"), sl);
+    Msg sv = rtsp(QStringLiteral("SETUP"), sessionUri, vbody,
+                  {{QStringLiteral("X-Apple-ProtocolVersion"),
+                    QStringLiteral("1")}},
+                  20000);
+    int dataPort = 0;
+    if (sv.ok && (sv.code == 200 || sv.code == 204)) {
+        const QVariantMap m = Bplist::decode(sv.body).toMap();
+        const QVariantList rl = m.value(QStringLiteral("streams")).toList();
+        for (const QVariant &v : rl) {
+            const QVariantMap s = v.toMap();
+            if (s.value(QStringLiteral("type")).toInt() == 110)
+                dataPort = s.value(QStringLiteral("dataPort")).toInt();
+        }
+    }
+    castDebug(QStringLiteral("ap2: iphone video SETUP code=%1 dataPort=%2 %3")
+                  .arg(sv.code).arg(dataPort)
+                  .arg(sv.ok ? shortBody(sv.body) : sv.error));
+
+    Q_EMIT notice(tr("Mirror-próba (iphone): info %1, setup1 %2, record %3, "
+                     "audio %4, video %5, dataPort %6")
+                      .arg(infoMsg.code)
+                      .arg(s1msg.code)
+                      .arg(rec.code)
+                      .arg(sa.code)
+                      .arg(sv.code)
+                      .arg(dataPort),
+                  dataPort > 0 ? "ok" : "info");
+    rtcp->deleteLater();
     stop();
     return true;
 }
